@@ -1,13 +1,18 @@
-<script setup></script>
+<script setup>
+import Card from 'primevue/card'
+import McpConfig from '@/components/settings/McpConfig.vue'
+</script>
 
 <template>
-  <div class="max-w-6xl mx-auto">
+  <div class="max-w-6xl mx-auto flex flex-col gap-6">
     <Card>
       <template #title>系统设置</template>
       <template #subtitle>应用配置与偏好管理</template>
       <template #content>
-        <p class="text-surface-500">管理智能体、交易所配置和个人偏好设置。</p>
+        <p class="text-surface-500">管理智能体、MCP 服务器和个人偏好设置。</p>
       </template>
     </Card>
+
+    <McpConfig />
   </div>
 </template>

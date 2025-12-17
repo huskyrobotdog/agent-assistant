@@ -5,6 +5,8 @@ pub use agent::*;
 pub use mcp::*;
 
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
@@ -194,6 +196,73 @@ fn remove_mcp_server(
     Ok(format!("MCP 服务器 {} 已移除", name))
 }
 
+/// MCP 服务器配置（用于JSON序列化）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct McpServerEntry {
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    env: HashMap<String, String>,
+}
+
+/// MCP 配置文件结构
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct McpConfigFile {
+    #[serde(default, rename = "mcpServers")]
+    mcp_servers: HashMap<String, McpServerEntry>,
+}
+
+/// 获取 mcp.json 文件路径
+fn get_mcp_config_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("获取应用数据目录失败: {}", e))?;
+    Ok(app_data.join("mcp.json"))
+}
+
+/// 读取 MCP 配置
+#[tauri::command]
+fn get_mcp_config(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let config_path = get_mcp_config_path(&app)?;
+
+    if !config_path.exists() {
+        // 返回默认配置
+        let default_config = McpConfigFile::default();
+        return serde_json::to_value(default_config).map_err(|e| e.to_string());
+    }
+
+    let content =
+        std::fs::read_to_string(&config_path).map_err(|e| format!("读取配置文件失败: {}", e))?;
+
+    let config: McpConfigFile =
+        serde_json::from_str(&content).map_err(|e| format!("解析配置文件失败: {}", e))?;
+
+    serde_json::to_value(config).map_err(|e| e.to_string())
+}
+
+/// 保存 MCP 配置
+#[tauri::command]
+fn save_mcp_config(app: tauri::AppHandle, config: serde_json::Value) -> Result<String, String> {
+    let config_path = get_mcp_config_path(&app)?;
+
+    // 验证配置格式
+    let _: McpConfigFile =
+        serde_json::from_value(config.clone()).map_err(|e| format!("配置格式无效: {}", e))?;
+
+    // 确保目录存在
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
+    }
+
+    let content = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
+
+    std::fs::write(&config_path, content).map_err(|e| format!("保存配置文件失败: {}", e))?;
+
+    Ok("配置保存成功".to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -219,7 +288,9 @@ pub fn run() {
             get_messages,
             get_agent_state,
             add_mcp_server,
-            remove_mcp_server
+            remove_mcp_server,
+            get_mcp_config,
+            save_mcp_config
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
