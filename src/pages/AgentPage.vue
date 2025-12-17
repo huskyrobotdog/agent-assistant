@@ -1,5 +1,6 @@
 <script setup>
-import { ref, nextTick, onMounted, computed } from 'vue'
+import { ref, nextTick, onMounted } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import ConversationList from '@/components/agent/ConversationList.vue'
 import ChatMessage from '@/components/agent/ChatMessage.vue'
 import ChatInput from '@/components/agent/ChatInput.vue'
@@ -170,20 +171,26 @@ async function handleSend(content) {
   await nextTick()
   scrollToBottom()
 
-  // 模拟 AI 响应（随机等待 3-8 秒）
-  const delay = 3000 + Math.random() * 5000
-  setTimeout(() => {
+  try {
+    const response = await invoke('chat', { message: content })
     const aiMessage = {
       id: Date.now() + 1,
       role: 'assistant',
-      content:
-        '这是一个模拟的 AI 回复。在实际应用中，这里会调用后端 API 获取真实的 AI 响应。\n\n您可以在这里集成您的 AI 服务。',
-      thinking: '分析用户输入，生成相关回复...',
+      content: response,
     }
     messages.value.push(aiMessage)
+  } catch (error) {
+    const errorMessage = {
+      id: Date.now() + 1,
+      role: 'assistant',
+      content: `❌ 错误: ${error}`,
+    }
+    messages.value.push(errorMessage)
+  } finally {
     isLoading.value = false
-    nextTick(() => scrollToBottom())
-  }, delay)
+    await nextTick()
+    scrollToBottom()
+  }
 }
 
 // 滚动到底部
