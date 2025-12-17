@@ -138,6 +138,10 @@ pub struct ReactAgent {
 impl ReactAgent {
     /// 创建新的 Agent
     pub fn new(config: AgentConfig) -> Result<Self, AgentError> {
+        // 禁用 llama 日志
+        let log_options = llama_cpp_2::LogOptions::default().with_logs_enabled(false);
+        llama_cpp_2::send_logs_to_tracing(log_options);
+
         let backend = LlamaBackend::init()
             .map_err(|e| AgentError::ModelLoadError(format!("初始化 llama 后端失败: {}", e)))?;
 
@@ -372,6 +376,13 @@ impl ReactAgent {
 
             output.push_str(&token_str);
 
+            #[cfg(debug_assertions)]
+            {
+                use std::io::Write;
+                print!("{}", token_str);
+                let _ = std::io::stdout().flush();
+            }
+
             if let Some(cb) = callback {
                 cb(&token_str);
             }
@@ -389,11 +400,9 @@ impl ReactAgent {
 
         #[cfg(debug_assertions)]
         println!(
-            "\n✅ [推理完成] 共生成 {} 个 token",
+            "\n\n✅ [推理完成] 共生成 {} 个 token",
             n_cur - tokens.len() as i32
         );
-        #[cfg(debug_assertions)]
-        println!("\n💬 [响应内容]\n{}", output);
 
         *self.state.write() = AgentState::Idle;
         Ok(output)
