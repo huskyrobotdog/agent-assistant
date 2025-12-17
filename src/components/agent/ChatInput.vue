@@ -49,7 +49,7 @@ function handleKeydown(event) {
       <div class="input-container">
         <Textarea
           v-model="inputMessage"
-          placeholder="输入消息..."
+          placeholder="提问"
           :autoResize="false"
           rows="3"
           :maxlength="maxLength"
@@ -100,7 +100,7 @@ function handleKeydown(event) {
     #ef4444 355deg,
     transparent 360deg
   );
-  animation: rotate-glow 1s linear infinite;
+  animation: rotate-glow 3s linear infinite;
   z-index: 0;
   opacity: 1;
 }
