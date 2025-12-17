@@ -20,8 +20,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
 llama-cpp-2 = { version = "0.1.130", features = ["metal"] }
-tokio = { version = "1", features = ["full", "sync", "rt-multi-thread"] }
-async-trait = "0.1"
 thiserror = "1.0"
 tracing = "0.1"
 parking_lot = "0.12"

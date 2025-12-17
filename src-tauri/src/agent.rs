@@ -119,9 +119,8 @@ pub type GenerationCallback = Box<dyn Fn(&str) + Send + Sync>;
 pub type GenerationCallbackRef<'a> = Option<&'a dyn Fn(&str)>;
 
 /// MCP 工具执行器 trait
-#[async_trait::async_trait]
 pub trait McpToolExecutor: Send + Sync {
-    async fn execute(&self, tool_call: &ToolCall) -> Result<ToolResult, AgentError>;
+    fn execute(&self, tool_call: &ToolCall) -> Result<ToolResult, AgentError>;
     fn get_tools(&self) -> Vec<McpTool>;
 }
 
@@ -305,10 +304,12 @@ impl ReactAgent {
 
         #[cfg(debug_assertions)]
         {
-            println!("\n📝 [Prompt 长度] {} 字符", prompt.len());
-            // 打印 prompt 的最后 500 个字符（避免输出过多）
-            if prompt.len() > 500 {
-                println!("\n📝 [Prompt 末尾] ...{}", &prompt[prompt.len() - 500..]);
+            let char_count = prompt.chars().count();
+            println!("\n📝 [Prompt 长度] {} 字符", char_count);
+            // 打印 prompt 的最后 200 个字符（避免输出过多）
+            if char_count > 200 {
+                let tail: String = prompt.chars().skip(char_count - 200).collect();
+                println!("\n📝 [Prompt 末尾] ...{}", tail);
             } else {
                 println!("\n📝 [Prompt] {}", prompt);
             }
@@ -445,11 +446,19 @@ impl ReactAgent {
     }
 
     /// 执行单次 ReAct 循环
-    pub async fn step(&self) -> Result<(String, bool), AgentError> {
+    pub fn step(&self) -> Result<(String, bool), AgentError> {
+        self.step_with_callback(None)
+    }
+
+    /// 执行单次 ReAct 循环（带回调）
+    pub fn step_with_callback(
+        &self,
+        callback: Option<&dyn Fn(&str)>,
+    ) -> Result<(String, bool), AgentError> {
         #[cfg(debug_assertions)]
         println!("\n🔄 [ReAct Step] 开始执行单次循环");
 
-        let response = self.generate()?;
+        let response = self.generate_with_callback(callback)?;
 
         let tool_calls = self.parse_tool_calls(&response);
 
@@ -472,7 +481,7 @@ impl ReactAgent {
             }
 
             for tool_call in &tool_calls {
-                let result = self.execute_tool(tool_call).await?;
+                let result = self.execute_tool(tool_call)?;
 
                 let mut messages = self.messages.write();
                 messages.push(Message {
@@ -502,7 +511,7 @@ impl ReactAgent {
     }
 
     /// 执行工具调用
-    async fn execute_tool(&self, tool_call: &ToolCall) -> Result<ToolResult, AgentError> {
+    fn execute_tool(&self, tool_call: &ToolCall) -> Result<ToolResult, AgentError> {
         #[cfg(debug_assertions)]
         println!(
             "\n⚡ [执行工具] {} 参数: {}",
@@ -523,7 +532,7 @@ impl ReactAgent {
         };
 
         if let Some(executor) = executor_opt {
-            let result = executor.execute(tool_call).await;
+            let result = executor.execute(tool_call);
             #[cfg(debug_assertions)]
             if let Ok(ref r) = result {
                 println!("\n📤 [工具结果] {}: {}", r.tool_name, r.result);
@@ -542,7 +551,17 @@ impl ReactAgent {
     }
 
     /// 运行完整的 ReAct 循环
-    pub async fn run(&self, user_input: &str, max_iterations: usize) -> Result<String, AgentError> {
+    pub fn run(&self, user_input: &str, max_iterations: usize) -> Result<String, AgentError> {
+        self.run_with_callback(user_input, max_iterations, None)
+    }
+
+    /// 运行完整的 ReAct 循环（带回调）
+    pub fn run_with_callback(
+        &self,
+        user_input: &str,
+        max_iterations: usize,
+        callback: Option<&dyn Fn(&str)>,
+    ) -> Result<String, AgentError> {
         #[cfg(debug_assertions)]
         println!("\n\n🚀 ================== ReAct Agent 开始 ==================");
         #[cfg(debug_assertions)]
@@ -571,7 +590,7 @@ impl ReactAgent {
             #[cfg(debug_assertions)]
             println!("\n🔁 [迭代] {}/{}", iterations + 1, max_iterations);
 
-            let (response, is_done) = self.step().await?;
+            let (response, is_done) = self.step_with_callback(callback)?;
 
             final_response = response;
 
@@ -610,9 +629,8 @@ impl ReactAgent {
 /// 内置的 Echo 工具执行器（用于测试）
 pub struct EchoToolExecutor;
 
-#[async_trait::async_trait]
 impl McpToolExecutor for EchoToolExecutor {
-    async fn execute(&self, tool_call: &ToolCall) -> Result<ToolResult, AgentError> {
+    fn execute(&self, tool_call: &ToolCall) -> Result<ToolResult, AgentError> {
         Ok(ToolResult {
             tool_name: tool_call.name.clone(),
             result: format!(

@@ -6,7 +6,7 @@ pub use mcp::*;
 
 use parking_lot::RwLock;
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// 全局 Agent 状态（Tauri 管理）
 struct TauriAgentState {
@@ -30,7 +30,7 @@ fn greet(name: &str) -> String {
 
 /// 初始化 Agent
 #[tauri::command]
-async fn init_agent(
+fn init_agent(
     state: tauri::State<'_, TauriAgentState>,
     model_path: String,
     n_ctx: Option<u32>,
@@ -41,7 +41,7 @@ async fn init_agent(
         model_path: std::path::PathBuf::from(model_path),
         n_ctx: n_ctx.unwrap_or(8192),
         n_threads: n_threads.unwrap_or(4),
-        n_gpu_layers: n_gpu_layers.unwrap_or(0),
+        n_gpu_layers: n_gpu_layers.unwrap_or(99),
         ..Default::default()
     };
 
@@ -52,9 +52,10 @@ async fn init_agent(
     Ok("Agent 初始化成功".to_string())
 }
 
-/// 发送消息给 Agent
+/// 发送消息给 Agent（流式）
 #[tauri::command]
-async fn chat(
+fn chat(
+    app: tauri::AppHandle,
     state: tauri::State<'_, TauriAgentState>,
     message: String,
     max_iterations: Option<usize>,
@@ -65,10 +66,19 @@ async fn chat(
         .clone()
         .ok_or_else(|| "Agent 未初始化".to_string())?;
 
+    let max_iter = max_iterations.unwrap_or(10);
+
+    // 使用回调发送流式 token
+    let callback = |token: &str| {
+        let _ = app.emit("chat-token", token.to_string());
+    };
+
     let response = agent
-        .run(&message, max_iterations.unwrap_or(10))
-        .await
+        .run_with_callback(&message, max_iter, Some(&callback))
         .map_err(|e| e.to_string())?;
+
+    // 发送完成事件
+    let _ = app.emit("chat-done", response.clone());
 
     Ok(response)
 }
@@ -113,7 +123,7 @@ fn get_agent_state(state: tauri::State<'_, TauriAgentState>) -> Result<String, S
 
 /// 添加 MCP 服务器
 #[tauri::command]
-async fn add_mcp_server(
+fn add_mcp_server(
     state: tauri::State<'_, TauriAgentState>,
     name: String,
     command: String,
@@ -133,12 +143,11 @@ async fn add_mcp_server(
 
     mcp_manager
         .add_server(&name, config)
-        .await
         .map_err(|e| e.to_string())?;
 
     let agent_opt = state.agent.read().clone();
     if let Some(agent) = agent_opt {
-        if let Some(client) = mcp_manager.get_client(&name).await {
+        if let Some(client) = mcp_manager.get_client(&name) {
             let executor = Arc::new(McpToolExecutorWrapper::new(client));
             agent.register_tool_executor(&name, executor);
         }
@@ -149,7 +158,7 @@ async fn add_mcp_server(
 
 /// 移除 MCP 服务器
 #[tauri::command]
-async fn remove_mcp_server(
+fn remove_mcp_server(
     state: tauri::State<'_, TauriAgentState>,
     name: String,
 ) -> Result<String, String> {
@@ -161,7 +170,6 @@ async fn remove_mcp_server(
 
     mcp_manager
         .remove_server(&name)
-        .await
         .map_err(|e| e.to_string())?;
 
     Ok(format!("MCP 服务器 {} 已移除", name))

@@ -1,6 +1,7 @@
 <script setup>
-import { ref, nextTick, onMounted } from 'vue'
+import { ref, nextTick, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import ConversationList from '@/components/agent/ConversationList.vue'
 import ChatMessage from '@/components/agent/ChatMessage.vue'
 import ChatInput from '@/components/agent/ChatInput.vue'
@@ -158,6 +159,9 @@ function renameConversation({ id, title }) {
   }
 }
 
+// 当前流式消息 ID
+const streamingMessageId = ref(null)
+
 // 发送消息
 async function handleSend(content) {
   const userMessage = {
@@ -168,26 +172,29 @@ async function handleSend(content) {
   messages.value.push(userMessage)
   isLoading.value = true
 
+  // 创建空的 AI 消息用于流式填充
+  const aiMessageId = Date.now() + 1
+  streamingMessageId.value = aiMessageId
+  messages.value.push({
+    id: aiMessageId,
+    role: 'assistant',
+    content: '',
+  })
+
   await nextTick()
   scrollToBottom()
 
   try {
-    const response = await invoke('chat', { message: content })
-    const aiMessage = {
-      id: Date.now() + 1,
-      role: 'assistant',
-      content: response,
-    }
-    messages.value.push(aiMessage)
+    await invoke('chat', { message: content })
   } catch (error) {
-    const errorMessage = {
-      id: Date.now() + 1,
-      role: 'assistant',
-      content: `❌ 错误: ${error}`,
+    // 更新消息为错误信息
+    const msg = messages.value.find((m) => m.id === aiMessageId)
+    if (msg) {
+      msg.content = `❌ 错误: ${error}`
     }
-    messages.value.push(errorMessage)
   } finally {
     isLoading.value = false
+    streamingMessageId.value = null
     await nextTick()
     scrollToBottom()
   }
@@ -200,8 +207,34 @@ function scrollToBottom() {
   }
 }
 
-onMounted(() => {
+// 事件监听器
+let unlistenToken = null
+let unlistenDone = null
+
+onMounted(async () => {
   scrollToBottom()
+
+  // 监听流式 token
+  unlistenToken = await listen('chat-token', (event) => {
+    if (streamingMessageId.value) {
+      const msg = messages.value.find((m) => m.id === streamingMessageId.value)
+      if (msg) {
+        msg.content += event.payload
+        nextTick(() => scrollToBottom())
+      }
+    }
+  })
+
+  // 监听完成事件
+  unlistenDone = await listen('chat-done', () => {
+    isLoading.value = false
+    streamingMessageId.value = null
+  })
+})
+
+onUnmounted(() => {
+  if (unlistenToken) unlistenToken()
+  if (unlistenDone) unlistenDone()
 })
 </script>
 

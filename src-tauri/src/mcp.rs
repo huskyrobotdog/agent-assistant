@@ -1,11 +1,10 @@
 use crate::agent::{AgentError, McpTool, McpToolExecutor, ToolCall, ToolResult};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::process::Stdio;
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
 
 /// JSON-RPC 请求
 #[derive(Debug, Serialize)]
@@ -80,7 +79,7 @@ pub struct McpClientConfig {
     pub env: HashMap<String, String>,
 }
 
-/// MCP 客户端 - 通过 stdio 与 MCP 服务器通信
+/// MCP 客户端 - 通过 stdio 与 MCP 服务器通信（同步版本）
 pub struct McpClient {
     config: McpClientConfig,
     process: Mutex<Option<Child>>,
@@ -99,7 +98,7 @@ impl McpClient {
     }
 
     /// 启动 MCP 服务器进程
-    pub async fn connect(&self) -> Result<(), AgentError> {
+    pub fn connect(&self) -> Result<(), AgentError> {
         let mut cmd = Command::new(&self.config.command);
         cmd.args(&self.config.args)
             .stdin(Stdio::piped())
@@ -114,26 +113,26 @@ impl McpClient {
             .spawn()
             .map_err(|e| AgentError::McpError(format!("启动 MCP 服务器失败: {}", e)))?;
 
-        *self.process.lock().await = Some(child);
+        *self.process.lock() = Some(child);
 
-        self.initialize().await?;
-        self.refresh_tools().await?;
+        self.initialize()?;
+        self.refresh_tools()?;
 
         Ok(())
     }
 
     /// 发送 JSON-RPC 请求
-    async fn send_request(
+    fn send_request(
         &self,
         method: &str,
         params: Option<serde_json::Value>,
     ) -> Result<serde_json::Value, AgentError> {
-        let mut process_guard = self.process.lock().await;
+        let mut process_guard = self.process.lock();
         let process = process_guard
             .as_mut()
             .ok_or_else(|| AgentError::McpError("MCP 服务器未连接".to_string()))?;
 
-        let mut id_guard = self.request_id.lock().await;
+        let mut id_guard = self.request_id.lock();
         *id_guard += 1;
         let id = *id_guard;
         drop(id_guard);
@@ -153,14 +152,11 @@ impl McpClient {
             .as_mut()
             .ok_or_else(|| AgentError::McpError("无法获取 stdin".to_string()))?;
 
-        stdin
-            .write_all(format!("{}\n", request_json).as_bytes())
-            .await
+        writeln!(stdin, "{}", request_json)
             .map_err(|e| AgentError::McpError(format!("写入请求失败: {}", e)))?;
 
         stdin
             .flush()
-            .await
             .map_err(|e| AgentError::McpError(format!("刷新 stdin 失败: {}", e)))?;
 
         let stdout = process
@@ -173,7 +169,6 @@ impl McpClient {
 
         reader
             .read_line(&mut line)
-            .await
             .map_err(|e| AgentError::McpError(format!("读取响应失败: {}", e)))?;
 
         let response: JsonRpcResponse = serde_json::from_str(&line)
@@ -192,7 +187,7 @@ impl McpClient {
     }
 
     /// 初始化 MCP 连接
-    async fn initialize(&self) -> Result<(), AgentError> {
+    fn initialize(&self) -> Result<(), AgentError> {
         let params = serde_json::json!({
             "protocolVersion": "2024-11-05",
             "capabilities": {
@@ -204,18 +199,15 @@ impl McpClient {
             }
         });
 
-        self.send_request("initialize", Some(params)).await?;
-
-        self.send_request("notifications/initialized", None)
-            .await
-            .ok();
+        self.send_request("initialize", Some(params))?;
+        self.send_request("notifications/initialized", None).ok();
 
         Ok(())
     }
 
     /// 刷新工具列表
-    pub async fn refresh_tools(&self) -> Result<(), AgentError> {
-        let result = self.send_request("tools/list", None).await?;
+    pub fn refresh_tools(&self) -> Result<(), AgentError> {
+        let result = self.send_request("tools/list", None)?;
 
         let list_response: ListToolsResponse = serde_json::from_value(result)
             .map_err(|e| AgentError::McpError(format!("解析工具列表失败: {}", e)))?;
@@ -230,13 +222,13 @@ impl McpClient {
             })
             .collect();
 
-        *self.tools.lock().await = tools;
+        *self.tools.lock() = tools;
 
         Ok(())
     }
 
     /// 调用工具
-    pub async fn call_tool(
+    pub fn call_tool(
         &self,
         name: &str,
         arguments: serde_json::Value,
@@ -246,7 +238,7 @@ impl McpClient {
             "arguments": arguments
         });
 
-        let result = self.send_request("tools/call", Some(params)).await?;
+        let result = self.send_request("tools/call", Some(params))?;
 
         let call_response: CallToolResponse = serde_json::from_value(result)
             .map_err(|e| AgentError::McpError(format!("解析工具调用结果失败: {}", e)))?;
@@ -272,15 +264,19 @@ impl McpClient {
     }
 
     /// 断开连接
-    pub async fn disconnect(&self) -> Result<(), AgentError> {
-        let mut process_guard = self.process.lock().await;
+    pub fn disconnect(&self) -> Result<(), AgentError> {
+        let mut process_guard = self.process.lock();
         if let Some(mut process) = process_guard.take() {
             process
                 .kill()
-                .await
                 .map_err(|e| AgentError::McpError(format!("终止 MCP 服务器失败: {}", e)))?;
         }
         Ok(())
+    }
+
+    /// 获取工具列表
+    pub fn get_tools(&self) -> Vec<McpTool> {
+        self.tools.lock().clone()
     }
 }
 
@@ -295,19 +291,14 @@ impl McpToolExecutorWrapper {
     }
 }
 
-#[async_trait::async_trait]
 impl McpToolExecutor for McpToolExecutorWrapper {
-    async fn execute(&self, tool_call: &ToolCall) -> Result<ToolResult, AgentError> {
+    fn execute(&self, tool_call: &ToolCall) -> Result<ToolResult, AgentError> {
         self.client
             .call_tool(&tool_call.name, tool_call.arguments.clone())
-            .await
     }
 
     fn get_tools(&self) -> Vec<McpTool> {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { self.client.tools.lock().await.clone() })
-        })
+        self.client.get_tools()
     }
 }
 
@@ -324,53 +315,52 @@ impl McpManager {
     }
 
     /// 添加 MCP 服务器
-    pub async fn add_server(
+    pub fn add_server(
         &self,
         name: &str,
         config: McpClientConfig,
     ) -> Result<Arc<McpClient>, AgentError> {
         let client = Arc::new(McpClient::new(config));
-        client.connect().await?;
+        client.connect()?;
 
-        let mut clients = self.clients.lock().await;
+        let mut clients = self.clients.lock();
         clients.insert(name.to_string(), client.clone());
 
         Ok(client)
     }
 
     /// 获取 MCP 客户端
-    pub async fn get_client(&self, name: &str) -> Option<Arc<McpClient>> {
-        let clients = self.clients.lock().await;
+    pub fn get_client(&self, name: &str) -> Option<Arc<McpClient>> {
+        let clients = self.clients.lock();
         clients.get(name).cloned()
     }
 
     /// 移除 MCP 服务器
-    pub async fn remove_server(&self, name: &str) -> Result<(), AgentError> {
-        let mut clients = self.clients.lock().await;
+    pub fn remove_server(&self, name: &str) -> Result<(), AgentError> {
+        let mut clients = self.clients.lock();
         if let Some(client) = clients.remove(name) {
-            client.disconnect().await?;
+            client.disconnect()?;
         }
         Ok(())
     }
 
     /// 获取所有工具
-    pub async fn get_all_tools(&self) -> Vec<McpTool> {
-        let clients = self.clients.lock().await;
+    pub fn get_all_tools(&self) -> Vec<McpTool> {
+        let clients = self.clients.lock();
         let mut all_tools = Vec::new();
 
         for client in clients.values() {
-            let tools = client.tools.lock().await;
-            all_tools.extend(tools.clone());
+            all_tools.extend(client.get_tools());
         }
 
         all_tools
     }
 
     /// 关闭所有连接
-    pub async fn shutdown(&self) -> Result<(), AgentError> {
-        let mut clients = self.clients.lock().await;
+    pub fn shutdown(&self) -> Result<(), AgentError> {
+        let mut clients = self.clients.lock();
         for (_, client) in clients.drain() {
-            client.disconnect().await?;
+            client.disconnect()?;
         }
         Ok(())
     }

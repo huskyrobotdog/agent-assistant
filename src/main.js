@@ -45,7 +45,8 @@ const loadApp = () => {
 
 const startApp = async () => {
     const appData = await appDataDir();
-    const modelPath = await join(appData, 'models', 'Qwen3-4B-Thinking-2507-UD-IQ1_M.gguf');
+    // const modelPath = await join(appData, 'models', 'Qwen3-4B-Thinking-2507-UD-IQ1_M.gguf');
+    const modelPath = await join(appData, 'models', 'Qwen3-1.7B-Q8_0.gguf');
     console.log(modelPath)
     await invoke('init_agent', { modelPath });
     loadApp()
