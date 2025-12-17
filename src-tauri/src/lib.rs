@@ -1,3 +1,5 @@
+mod agent;
+
 use tauri::Manager;
 
 #[tauri::command]
