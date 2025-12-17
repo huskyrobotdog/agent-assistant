@@ -26,6 +26,21 @@ const showThinking = ref(false)
 
 const isUser = computed(() => props.message.role === 'user')
 
+// 清理内容：移除 <think> 标签及其内容
+function cleanContent(text) {
+  // 移除 <think>...</think> 标签及内容
+  let cleaned = text.replace(/<think>[\s\S]*?<\/think>/g, '')
+  // 移除未闭合的 <think> 标签及后续内容
+  const thinkIdx = cleaned.indexOf('<think>')
+  if (thinkIdx !== -1) {
+    cleaned = cleaned.substring(0, thinkIdx)
+  }
+  // 移除残留的 "Observation" 词（当 stop word 生效时可能残留）
+  cleaned = cleaned.replace(/\nObservation\s*$/g, '')
+  cleaned = cleaned.replace(/^Observation\s*$/gm, '')
+  return cleaned.trim()
+}
+
 // 解析内容，提取思考/操作/观察等步骤（支持 Qwen ReAct 格式）
 const parsedContent = computed(() => {
   const content = props.message.content || ''
@@ -40,16 +55,23 @@ const parsedContent = computed(() => {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
 
+    // 跳过 <think> 标签行
+    if (line.includes('<think>') || line.includes('</think>')) {
+      continue
+    }
+
     if (line.startsWith('Thought:')) {
       // 保存之前的内容
       if (currentType && currentContent.length > 0) {
-        steps.push({ type: currentType, content: currentContent.join('\n').trim() })
+        const cleaned = cleanContent(currentContent.join('\n'))
+        if (cleaned) steps.push({ type: currentType, content: cleaned })
       }
       currentType = 'thought'
       currentContent = [line.substring(8).trim()]
     } else if (line.startsWith('Action:')) {
       if (currentType && currentContent.length > 0) {
-        steps.push({ type: currentType, content: currentContent.join('\n').trim() })
+        const cleaned = cleanContent(currentContent.join('\n'))
+        if (cleaned) steps.push({ type: currentType, content: cleaned })
       }
       currentType = 'action'
       currentContent = [line.substring(7).trim()]
@@ -60,13 +82,15 @@ const parsedContent = computed(() => {
       }
     } else if (line.startsWith('Observation:')) {
       if (currentType && currentContent.length > 0) {
-        steps.push({ type: currentType, content: currentContent.join('\n').trim() })
+        const cleaned = cleanContent(currentContent.join('\n'))
+        if (cleaned) steps.push({ type: currentType, content: cleaned })
       }
       currentType = 'observation'
       currentContent = [line.substring(12).trim()]
     } else if (line.startsWith('Final Answer:')) {
       if (currentType && currentContent.length > 0) {
-        steps.push({ type: currentType, content: currentContent.join('\n').trim() })
+        const cleaned = cleanContent(currentContent.join('\n'))
+        if (cleaned) steps.push({ type: currentType, content: cleaned })
       }
       currentType = null
       currentContent = []
@@ -75,27 +99,27 @@ const parsedContent = computed(() => {
       for (let j = i + 1; j < lines.length; j++) {
         finalAnswer += '\n' + lines[j]
       }
-      finalAnswer = finalAnswer.trim()
+      finalAnswer = cleanContent(finalAnswer)
       break
     } else if (currentType) {
-      // 继续当前类型的内容
-      currentContent.push(line)
+      // 继续当前类型的内容（跳过只包含 "Observation" 的行）
+      if (line.trim() !== 'Observation' && !line.startsWith('<think>')) {
+        currentContent.push(line)
+      }
     }
   }
 
   // 保存最后的内容
   if (currentType && currentContent.length > 0) {
-    steps.push({ type: currentType, content: currentContent.join('\n').trim() })
+    const cleaned = cleanContent(currentContent.join('\n'))
+    if (cleaned) steps.push({ type: currentType, content: cleaned })
   }
-
-  // 过滤空步骤
-  const filteredSteps = steps.filter((s) => s.content)
 
   // 检测流式状态
   const isStreaming = content.includes('Thought:') && !content.includes('Final Answer:')
 
   return {
-    steps: filteredSteps,
+    steps,
     response: finalAnswer,
     isStreaming,
     hasFinalAnswer: !!finalAnswer,
