@@ -91,7 +91,7 @@ impl Default for AgentConfig {
             model_path: PathBuf::from("models/Qwen3-4B-Thinking-2507-UD-IQ1_M.gguf"),
             n_ctx: 8192,
             n_threads: 4,
-            n_gpu_layers: 0,
+            n_gpu_layers: 99,
             temperature: 0.6,
             top_p: 0.95,
             top_k: 20,
@@ -244,6 +244,9 @@ impl ReactAgent {
 
     /// 添加用户消息
     pub fn add_user_message(&self, content: &str) {
+        #[cfg(debug_assertions)]
+        println!("\n💬 [用户输入] {}", content);
+
         let mut messages = self.messages.write();
         messages.push(Message {
             role: Role::User,
@@ -295,7 +298,21 @@ impl ReactAgent {
     ) -> Result<String, AgentError> {
         *self.state.write() = AgentState::Thinking;
 
+        #[cfg(debug_assertions)]
+        println!("\n🧠 [开始推理]");
+
         let prompt = self.build_prompt()?;
+
+        #[cfg(debug_assertions)]
+        {
+            println!("\n📝 [Prompt 长度] {} 字符", prompt.len());
+            // 打印 prompt 的最后 500 个字符（避免输出过多）
+            if prompt.len() > 500 {
+                println!("\n📝 [Prompt 末尾] ...{}", &prompt[prompt.len() - 500..]);
+            } else {
+                println!("\n📝 [Prompt] {}", prompt);
+            }
+        }
 
         let ctx_params = LlamaContextParams::default()
             .with_n_ctx(Some(NonZeroU32::new(self.config.n_ctx).unwrap()))
@@ -369,6 +386,14 @@ impl ReactAgent {
             n_cur += 1;
         }
 
+        #[cfg(debug_assertions)]
+        println!(
+            "\n✅ [推理完成] 共生成 {} 个 token",
+            n_cur - tokens.len() as i32
+        );
+        #[cfg(debug_assertions)]
+        println!("\n💬 [响应内容]\n{}", output);
+
         *self.state.write() = AgentState::Idle;
         Ok(output)
     }
@@ -421,9 +446,17 @@ impl ReactAgent {
 
     /// 执行单次 ReAct 循环
     pub async fn step(&self) -> Result<(String, bool), AgentError> {
+        #[cfg(debug_assertions)]
+        println!("\n🔄 [ReAct Step] 开始执行单次循环");
+
         let response = self.generate()?;
 
         let tool_calls = self.parse_tool_calls(&response);
+
+        #[cfg(debug_assertions)]
+        if !tool_calls.is_empty() {
+            println!("\n🔧 [检测到工具调用] {:?}", tool_calls);
+        }
 
         if !tool_calls.is_empty() {
             *self.state.write() = AgentState::Acting;
@@ -470,6 +503,12 @@ impl ReactAgent {
 
     /// 执行工具调用
     async fn execute_tool(&self, tool_call: &ToolCall) -> Result<ToolResult, AgentError> {
+        #[cfg(debug_assertions)]
+        println!(
+            "\n⚡ [执行工具] {} 参数: {}",
+            tool_call.name, tool_call.arguments
+        );
+
         let executor_opt = {
             let executors = self.tool_executors.read();
             executors
@@ -484,8 +523,16 @@ impl ReactAgent {
         };
 
         if let Some(executor) = executor_opt {
-            return executor.execute(tool_call).await;
+            let result = executor.execute(tool_call).await;
+            #[cfg(debug_assertions)]
+            if let Ok(ref r) = result {
+                println!("\n📤 [工具结果] {}: {}", r.tool_name, r.result);
+            }
+            return result;
         }
+
+        #[cfg(debug_assertions)]
+        println!("\n❌ [工具未找到] {}", tool_call.name);
 
         Ok(ToolResult {
             tool_name: tool_call.name.clone(),
@@ -496,10 +543,17 @@ impl ReactAgent {
 
     /// 运行完整的 ReAct 循环
     pub async fn run(&self, user_input: &str, max_iterations: usize) -> Result<String, AgentError> {
+        #[cfg(debug_assertions)]
+        println!("\n\n🚀 ================== ReAct Agent 开始 ==================");
+        #[cfg(debug_assertions)]
+        println!("📊 [最大迭代次数] {}", max_iterations);
+
         if self.messages.read().is_empty()
             || !self.messages.read().iter().any(|m| m.role == Role::System)
         {
             self.set_system_prompt(&self.build_react_system_prompt());
+            #[cfg(debug_assertions)]
+            println!("📋 [系统提示词已设置]");
         }
 
         self.add_user_message(user_input);
@@ -509,19 +563,29 @@ impl ReactAgent {
 
         loop {
             if iterations >= max_iterations {
+                #[cfg(debug_assertions)]
+                println!("\n⚠️ [达到最大迭代次数] {}", max_iterations);
                 break;
             }
+
+            #[cfg(debug_assertions)]
+            println!("\n🔁 [迭代] {}/{}", iterations + 1, max_iterations);
 
             let (response, is_done) = self.step().await?;
 
             final_response = response;
 
             if is_done {
+                #[cfg(debug_assertions)]
+                println!("\n✅ [任务完成]");
                 break;
             }
 
             iterations += 1;
         }
+
+        #[cfg(debug_assertions)]
+        println!("\n🏁 ================== ReAct Agent 结束 ==================\n");
 
         Ok(final_response)
     }
