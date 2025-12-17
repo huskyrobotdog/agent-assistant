@@ -317,6 +317,7 @@ Guidelines:
 
         let ctx_params = LlamaContextParams::default()
             .with_n_ctx(Some(NonZeroU32::new(self.config.n_ctx).unwrap()))
+            .with_n_batch(self.config.n_ctx) // 设置 n_batch 等于 n_ctx，避免 token 超限
             .with_n_threads(self.config.n_threads)
             .with_n_threads_batch(self.config.n_threads);
 
@@ -560,6 +561,24 @@ Guidelines:
         }
     }
 
+    /// 工具结果最大长度（字符数）
+    const MAX_TOOL_RESULT_LENGTH: usize = 2000;
+
+    /// 截断工具结果，避免 token 超限
+    fn truncate_result(result: &str, max_len: usize) -> String {
+        if result.len() <= max_len {
+            return result.to_string();
+        }
+
+        // 按字符边界截断
+        let truncated: String = result.chars().take(max_len).collect();
+        format!(
+            "{}...\n\n[结果已截断，原长度: {} 字符]",
+            truncated,
+            result.len()
+        )
+    }
+
     /// 执行工具调用
     fn execute_tool(&self, tool_call: &ToolCall) -> Result<ToolResult, AgentError> {
         #[cfg(debug_assertions)]
@@ -587,7 +606,11 @@ Guidelines:
             if let Ok(ref r) = result {
                 println!("\n📤 [工具结果] {}: {}", r.tool_name, r.result);
             }
-            return result;
+            // 截断过长的结果
+            return result.map(|mut r| {
+                r.result = Self::truncate_result(&r.result, Self::MAX_TOOL_RESULT_LENGTH);
+                r
+            });
         }
 
         #[cfg(debug_assertions)]

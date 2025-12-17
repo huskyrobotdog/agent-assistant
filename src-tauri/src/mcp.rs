@@ -4,7 +4,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
 use std::sync::Arc;
+use std::time::Duration;
+
+/// 默认请求超时时间（秒）
+const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
 /// JSON-RPC 请求
 #[derive(Debug, Serialize)]
@@ -77,6 +82,7 @@ pub struct McpClientConfig {
     pub command: String,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
+    pub timeout_secs: Option<u64>,
 }
 
 /// MCP 客户端 - 通过 stdio 与 MCP 服务器通信（同步版本）
@@ -121,12 +127,14 @@ impl McpClient {
         Ok(())
     }
 
-    /// 发送 JSON-RPC 请求
+    /// 发送 JSON-RPC 请求（带超时）
     fn send_request(
         &self,
         method: &str,
         params: Option<serde_json::Value>,
     ) -> Result<serde_json::Value, AgentError> {
+        let timeout = Duration::from_secs(self.config.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS));
+
         let mut process_guard = self.process.lock();
         let process = process_guard
             .as_mut()
@@ -159,31 +167,87 @@ impl McpClient {
             .flush()
             .map_err(|e| AgentError::McpError(format!("刷新 stdin 失败: {}", e)))?;
 
+        // 使用 channel 实现带超时的读取
         let stdout = process
             .stdout
-            .as_mut()
+            .take()
             .ok_or_else(|| AgentError::McpError("无法获取 stdout".to_string()))?;
 
-        let mut reader = BufReader::new(stdout);
-        let mut line = String::new();
+        let (tx, rx) = mpsc::channel::<()>();
+        drop(tx); // 不使用 tx，仅用 rx 做超时检测
 
-        reader
-            .read_line(&mut line)
-            .map_err(|e| AgentError::McpError(format!("读取响应失败: {}", e)))?;
+        let read_thread = std::thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            let mut line = String::new();
+            let result = reader.read_line(&mut line);
+            let stdout = reader.into_inner();
+            (result, line, stdout)
+        });
 
-        let response: JsonRpcResponse = serde_json::from_str(&line)
-            .map_err(|e| AgentError::McpError(format!("解析响应失败: {}", e)))?;
+        // 等待响应，带超时
+        match rx.recv_timeout(timeout) {
+            Ok(_) => unreachable!(),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // 超时了，但线程可能还在运行
+                // 尝试等待线程完成
+                match read_thread.join() {
+                    Ok((result, line, stdout)) => {
+                        // 恢复 stdout
+                        process.stdout = Some(stdout);
 
-        if let Some(error) = response.error {
-            return Err(AgentError::McpError(format!(
-                "MCP 错误 [{}]: {}",
-                error.code, error.message
-            )));
+                        result.map_err(|e| AgentError::McpError(format!("读取响应失败: {}", e)))?;
+
+                        let response: JsonRpcResponse = serde_json::from_str(&line)
+                            .map_err(|e| AgentError::McpError(format!("解析响应失败: {}", e)))?;
+
+                        if let Some(error) = response.error {
+                            return Err(AgentError::McpError(format!(
+                                "MCP 错误 [{}]: {}",
+                                error.code, error.message
+                            )));
+                        }
+
+                        return response
+                            .result
+                            .ok_or_else(|| AgentError::McpError("响应中没有结果".to_string()));
+                    }
+                    Err(_) => {
+                        return Err(AgentError::McpError(format!(
+                            "请求超时（{}秒）",
+                            timeout.as_secs()
+                        )));
+                    }
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                // channel 断开，线程已完成
+            }
         }
 
-        response
-            .result
-            .ok_or_else(|| AgentError::McpError("响应中没有结果".to_string()))
+        // 线程正常完成
+        match read_thread.join() {
+            Ok((result, line, stdout)) => {
+                // 恢复 stdout
+                process.stdout = Some(stdout);
+
+                result.map_err(|e| AgentError::McpError(format!("读取响应失败: {}", e)))?;
+
+                let response: JsonRpcResponse = serde_json::from_str(&line)
+                    .map_err(|e| AgentError::McpError(format!("解析响应失败: {}", e)))?;
+
+                if let Some(error) = response.error {
+                    return Err(AgentError::McpError(format!(
+                        "MCP 错误 [{}]: {}",
+                        error.code, error.message
+                    )));
+                }
+
+                response
+                    .result
+                    .ok_or_else(|| AgentError::McpError("响应中没有结果".to_string()))
+            }
+            Err(_) => Err(AgentError::McpError("读取线程异常".to_string())),
+        }
     }
 
     /// 初始化 MCP 连接

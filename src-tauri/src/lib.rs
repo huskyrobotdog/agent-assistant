@@ -33,6 +33,7 @@ fn greet(name: &str) -> String {
 /// 初始化 Agent
 #[tauri::command]
 async fn init_agent(
+    app: tauri::AppHandle,
     state: tauri::State<'_, TauriAgentState>,
     model_path: String,
     n_ctx: Option<u32>,
@@ -53,9 +54,71 @@ async fn init_agent(
         .map_err(|e| format!("任务执行失败: {}", e))?
         .map_err(|e| e.to_string())?;
 
-    *state.agent.write() = Some(Arc::new(agent));
+    let agent = Arc::new(agent);
+    *state.agent.write() = Some(agent.clone());
 
-    Ok("Agent 初始化成功".to_string())
+    // 加载 MCP 配置并连接服务器
+    let mcp_loaded = load_mcp_servers(&app, &state, &agent);
+
+    match mcp_loaded {
+        Ok(count) if count > 0 => Ok(format!("Agent 初始化成功，已加载 {} 个 MCP 服务器", count)),
+        Ok(_) => Ok("Agent 初始化成功".to_string()),
+        Err(e) => Ok(format!("Agent 初始化成功，但 MCP 加载失败: {}", e)),
+    }
+}
+
+/// 加载 MCP 服务器配置
+fn load_mcp_servers(
+    app: &tauri::AppHandle,
+    state: &tauri::State<'_, TauriAgentState>,
+    agent: &Arc<ReactAgent>,
+) -> Result<usize, String> {
+    let config_path = get_mcp_config_path(app)?;
+
+    if !config_path.exists() {
+        return Ok(0);
+    }
+
+    let content =
+        std::fs::read_to_string(&config_path).map_err(|e| format!("读取配置文件失败: {}", e))?;
+
+    let config: McpConfigFile =
+        serde_json::from_str(&content).map_err(|e| format!("解析配置文件失败: {}", e))?;
+
+    let mcp_manager = state
+        .mcp_manager
+        .read()
+        .clone()
+        .ok_or_else(|| "MCP 管理器未初始化".to_string())?;
+
+    let mut loaded_count = 0;
+
+    for (name, entry) in config.mcp_servers {
+        let mcp_config = McpClientConfig {
+            command: entry.command.clone(),
+            args: entry.args.clone(),
+            env: entry.env.clone(),
+            timeout_secs: None,
+        };
+
+        match mcp_manager.add_server(&name, mcp_config) {
+            Ok(_) => {
+                if let Some(client) = mcp_manager.get_client(&name) {
+                    let executor = Arc::new(McpToolExecutorWrapper::new(client));
+                    agent.register_tool_executor(&name, executor);
+                    loaded_count += 1;
+                    #[cfg(debug_assertions)]
+                    println!("✅ MCP 服务器 {} 已加载", name);
+                }
+            }
+            Err(e) => {
+                #[cfg(debug_assertions)]
+                eprintln!("❌ MCP 服务器 {} 加载失败: {}", name, e);
+            }
+        }
+    }
+
+    Ok(loaded_count)
 }
 
 /// 发送消息给 Agent（流式）
@@ -160,6 +223,7 @@ fn add_mcp_server(
         command,
         args,
         env: std::collections::HashMap::new(),
+        timeout_secs: None,
     };
 
     mcp_manager
