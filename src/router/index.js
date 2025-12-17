@@ -11,26 +11,6 @@ const routes = [
         component: () => import('@/pages/AgentPage.vue'),
     },
     {
-        path: '/strategy',
-        name: 'Strategy',
-        component: () => import('@/pages/StrategyPage.vue'),
-    },
-    {
-        path: '/backtest',
-        name: 'Backtest',
-        component: () => import('@/pages/BacktestPage.vue'),
-    },
-    {
-        path: '/data',
-        name: 'Data',
-        component: () => import('@/pages/DataPage.vue'),
-    },
-    {
-        path: '/live',
-        name: 'Live',
-        component: () => import('@/pages/LivePage.vue'),
-    },
-    {
         path: '/settings',
         name: 'Settings',
         component: () => import('@/pages/SettingsPage.vue'),

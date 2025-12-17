@@ -8,10 +8,6 @@ const route = useRoute()
 // 菜单项
 const menuItems = ref([
   { label: '智能体', icon: 'pi pi-microchip-ai', route: '/agent' },
-  { label: '策略', icon: 'pi pi-code', route: '/strategy' },
-  { label: '回测', icon: 'pi pi-chart-line', route: '/backtest' },
-  { label: '数据', icon: 'pi pi-database', route: '/data' },
-  { label: '实盘', icon: 'pi pi-bolt', route: '/live' },
   { label: '系统设置', icon: 'pi pi-cog', route: '/settings' },
 ])
 
