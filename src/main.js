@@ -6,7 +6,7 @@ import Tooltip from 'primevue/tooltip';
 import 'primeicons/primeicons.css';
 import '@/style.css';
 import App from '@/App.vue';
-import router from '@/router';
+import router from '@/router.js';
 
 const app = createApp(App);
 
