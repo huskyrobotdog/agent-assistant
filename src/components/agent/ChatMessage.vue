@@ -33,6 +33,7 @@ const parsedContent = computed(() => {
   // 解析各种标签
   const thinkRegex = /<think>([\s\S]*?)<\/think>/g
   const toolCallRegex = /<tool_call>([\s\S]*?)<\/tool_call>/g
+  const toolResponseRegex = /<tool_response>([\s\S]*?)<\/tool_response>/g
 
   // 提取所有步骤
   const steps = []
@@ -52,11 +53,32 @@ const parsedContent = computed(() => {
     }
   }
 
+  // 提取工具结果（观察）- Hermes 标准格式 <tool_response>
+  while ((match = toolResponseRegex.exec(content)) !== null) {
+    try {
+      const data = JSON.parse(match[1].trim())
+      steps.push({
+        type: 'observation',
+        content: `${data.name}: ${data.content}`,
+        isError: data.is_error,
+        index: match.index,
+      })
+    } catch {
+      // 如果 JSON 解析失败，直接显示原始内容
+      steps.push({
+        type: 'observation',
+        content: match[1].trim(),
+        isError: false,
+        index: match.index,
+      })
+    }
+  }
+
   // 按出现顺序排序
   steps.sort((a, b) => a.index - b.index)
 
   // 移除所有标签后的响应内容
-  let responseContent = content.replace(thinkRegex, '').replace(toolCallRegex, '')
+  let responseContent = content.replace(thinkRegex, '').replace(toolCallRegex, '').replace(toolResponseRegex, '')
 
   // 移除未闭合的标签及其内容（流式中）
   const thinkOpen = (content.match(/<think>/g) || []).length

@@ -122,6 +122,9 @@ pub type GenerationCallback = Box<dyn Fn(&str) + Send + Sync>;
 /// Agent 生成回调引用
 pub type GenerationCallbackRef<'a> = Option<&'a dyn Fn(&str)>;
 
+/// 工具结果回调引用
+pub type ToolResultCallbackRef<'a> = Option<&'a dyn Fn(&str, &str, bool)>;
+
 /// MCP 工具执行器 trait
 pub trait McpToolExecutor: Send + Sync {
     fn execute(&self, tool_call: &ToolCall) -> Result<ToolResult, AgentError>;
@@ -214,19 +217,23 @@ impl ReactAgent {
         };
 
         format!(
-            r#"You are a helpful assistant with access to the following tools:
+            r#"You are a function calling AI model. You are provided with function signatures within <tools></tools> XML tags. You may call one or more functions to assist with the user query. Don't make assumptions about what values to plug into functions.
 
+<tools>
 {tools_json}
+</tools>
 
-When you need to call a tool, use the following format:
+For each function call, return a JSON object with function name and arguments within <tool_call></tool_call> XML tags:
 
 <tool_call>
-{{"name": "tool_name", "arguments": {{"param": "value"}}}}
+{{"name": "function_name", "arguments": {{"param": "value"}}}}
 </tool_call>
+
+After calling a tool, you will receive the result within <tool_response></tool_response> XML tags.
 
 Guidelines:
 - Call only ONE tool at a time
-- Wait for tool results before proceeding
+- Wait for tool results in <tool_response> before proceeding
 - If a tool fails, try alternative approaches
 - Provide concise final answers
 - Always respond in the same language as the user's query"#,
@@ -476,13 +483,22 @@ Guidelines:
 
     /// 执行单次 ReAct 循环
     pub fn step(&self) -> Result<(String, bool), AgentError> {
-        self.step_with_callback(None)
+        self.step_with_callbacks(None, None)
     }
 
     /// 执行单次 ReAct 循环（带回调）
     pub fn step_with_callback(
         &self,
         callback: Option<&dyn Fn(&str)>,
+    ) -> Result<(String, bool), AgentError> {
+        self.step_with_callbacks(callback, None)
+    }
+
+    /// 执行单次 ReAct 循环（带生成回调和工具结果回调）
+    pub fn step_with_callbacks(
+        &self,
+        callback: Option<&dyn Fn(&str)>,
+        tool_callback: Option<&dyn Fn(&str, &str, bool)>,
     ) -> Result<(String, bool), AgentError> {
         #[cfg(debug_assertions)]
         println!("\n🔄 [ReAct Step] 开始执行单次循环");
@@ -511,6 +527,11 @@ Guidelines:
 
             for tool_call in &tool_calls {
                 let result = self.execute_tool(tool_call)?;
+
+                // 通过回调发送工具执行结果
+                if let Some(cb) = tool_callback {
+                    cb(&result.tool_name, &result.result, result.is_error);
+                }
 
                 let mut messages = self.messages.write();
                 messages.push(Message {
@@ -581,7 +602,7 @@ Guidelines:
 
     /// 运行完整的 ReAct 循环
     pub fn run(&self, user_input: &str, max_iterations: usize) -> Result<String, AgentError> {
-        self.run_with_callback(user_input, max_iterations, None)
+        self.run_with_callbacks(user_input, max_iterations, None, None)
     }
 
     /// 运行完整的 ReAct 循环（带回调）
@@ -590,6 +611,17 @@ Guidelines:
         user_input: &str,
         max_iterations: usize,
         callback: Option<&dyn Fn(&str)>,
+    ) -> Result<String, AgentError> {
+        self.run_with_callbacks(user_input, max_iterations, callback, None)
+    }
+
+    /// 运行完整的 ReAct 循环（带生成回调和工具结果回调）
+    pub fn run_with_callbacks(
+        &self,
+        user_input: &str,
+        max_iterations: usize,
+        callback: Option<&dyn Fn(&str)>,
+        tool_callback: Option<&dyn Fn(&str, &str, bool)>,
     ) -> Result<String, AgentError> {
         #[cfg(debug_assertions)]
         println!("\n\n🚀 ================== ReAct Agent 开始 ==================");
@@ -619,7 +651,7 @@ Guidelines:
             #[cfg(debug_assertions)]
             println!("\n🔁 [迭代] {}/{}", iterations + 1, max_iterations);
 
-            let (response, is_done) = self.step_with_callback(callback)?;
+            let (response, is_done) = self.step_with_callbacks(callback, tool_callback)?;
 
             final_response = response;
 

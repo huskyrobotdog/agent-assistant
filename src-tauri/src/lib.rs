@@ -73,12 +73,24 @@ async fn chat(
     let max_iter = max_iterations.unwrap_or(10);
     let app_clone = app.clone();
 
+    let app_clone2 = app.clone();
+
     // 在后台线程执行推理，避免阻塞主线程
     let response = tokio::task::spawn_blocking(move || {
         let callback = |token: &str| {
             let _ = app_clone.emit("chat-token", token.to_string());
         };
-        agent.run_with_callback(&message, max_iter, Some(&callback))
+        let tool_callback = |name: &str, result: &str, is_error: bool| {
+            let _ = app_clone2.emit(
+                "tool-result",
+                serde_json::json!({
+                    "name": name,
+                    "result": result,
+                    "isError": is_error
+                }),
+            );
+        };
+        agent.run_with_callbacks(&message, max_iter, Some(&callback), Some(&tool_callback))
     })
     .await
     .map_err(|e| format!("任务执行失败: {}", e))?
