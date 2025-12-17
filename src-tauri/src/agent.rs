@@ -98,7 +98,7 @@ impl Default for AgentConfig {
             top_p: 0.95,
             top_k: 20,
             min_p: 0.0,            // Qwen3 推荐 0.0
-            presence_penalty: 1.5, // 减少重复
+            presence_penalty: 1.0, // Qwen3 建议 ≤ 2.0，降低以保持输出质量
             max_tokens: 4096,
             seed: 1234,
         }
@@ -191,61 +191,46 @@ impl ReactAgent {
         );
     }
 
-    /// 构建 ReAct 系统提示词
+    /// 构建 Hermes-style 系统提示词 (Qwen3 推荐格式)
     fn build_react_system_prompt(&self) -> String {
         let tools = self.tools.read();
-        let tools_desc = if tools.is_empty() {
-            "当前没有可用的工具。".to_string()
+        let tools_json = if tools.is_empty() {
+            "[]".to_string()
         } else {
-            tools
+            let tools_array: Vec<serde_json::Value> = tools
                 .iter()
                 .map(|t| {
-                    format!(
-                        "- **{}**: {}\n  参数: {}",
-                        t.name,
-                        t.description,
-                        serde_json::to_string_pretty(&t.input_schema).unwrap_or_default()
-                    )
+                    serde_json::json!({
+                        "type": "function",
+                        "function": {
+                            "name": t.name,
+                            "description": t.description,
+                            "parameters": t.input_schema
+                        }
+                    })
                 })
-                .collect::<Vec<_>>()
-                .join("\n\n")
+                .collect();
+            serde_json::to_string_pretty(&tools_array).unwrap_or_default()
         };
 
         format!(
-            r#"你是一个智能助手，使用 ReAct (Reasoning and Acting) 模式来解决问题。
+            r#"You are a helpful assistant with access to the following tools:
 
-## 可用工具
-{tools_desc}
+{tools_json}
 
-## 工作模式
-你需要按照以下步骤思考和行动：
+When you need to call a tool, use the following format:
 
-1. **思考 (Thought)**: 分析当前情况，思考下一步应该做什么
-2. **行动 (Action)**: 如果需要使用工具，调用相应的工具
-3. **观察 (Observation)**: 观察工具返回的结果
-4. **重复**: 根据观察结果继续思考和行动，直到完成任务
-
-## 工具调用格式
-当你需要调用工具时，请使用以下 JSON 格式：
 <tool_call>
-{{"name": "工具名称", "arguments": {{"参数名": "参数值"}}}}
+{{"name": "tool_name", "arguments": {{"param": "value"}}}}
 </tool_call>
 
-## 思考过程格式
-在思考时，请使用 <think> 标签包裹你的思考过程：
-<think>
-这里是你的思考过程...
-</think>
-
-## 最终回答
-当你完成任务后，直接给出最终答案，不需要额外标记。
-
-记住：
-- 每次只调用一个工具
-- 仔细分析工具返回的结果
-- 如果工具调用失败，尝试其他方法
-- 保持回答简洁明了"#,
-            tools_desc = tools_desc
+Guidelines:
+- Call only ONE tool at a time
+- Wait for tool results before proceeding
+- If a tool fails, try alternative approaches
+- Provide concise final answers
+- Always respond in the same language as the user's query"#,
+            tools_json = tools_json
         )
     }
 
@@ -335,7 +320,7 @@ impl ReactAgent {
 
         let tokens = self
             .model
-            .str_to_token(&prompt, AddBos::Always)
+            .str_to_token(&prompt, AddBos::Never) // chat template 已添加 BOS
             .map_err(|e| AgentError::InferenceError(format!("分词失败: {}", e)))?;
 
         let mut batch = LlamaBatch::new(self.config.n_ctx as usize, 1);
@@ -351,6 +336,7 @@ impl ReactAgent {
         ctx.decode(&mut batch)
             .map_err(|e| AgentError::InferenceError(format!("解码失败: {}", e)))?;
 
+        // Qwen3 推荐采样顺序: temp → top_k → top_p → min_p → dist
         let mut sampler = LlamaSampler::chain_simple([
             LlamaSampler::penalties(
                 64,                           // 惩罚窗口大小
@@ -358,10 +344,10 @@ impl ReactAgent {
                 0.0,                          // frequency_penalty
                 self.config.presence_penalty, // presence_penalty
             ),
+            LlamaSampler::temp(self.config.temperature),
             LlamaSampler::top_k(self.config.top_k),
             LlamaSampler::top_p(self.config.top_p, 1),
             LlamaSampler::min_p(self.config.min_p, 1), // Qwen3 推荐 0.0
-            LlamaSampler::temp(self.config.temperature),
             LlamaSampler::dist(self.config.seed),
         ]);
 
@@ -419,30 +405,53 @@ impl ReactAgent {
         Ok(output)
     }
 
-    /// 解析工具调用
+    /// 解析工具调用 (支持多种格式)
     fn parse_tool_calls(&self, response: &str) -> Vec<ToolCall> {
         let mut tool_calls = Vec::new();
 
-        let re = regex::Regex::new(r"<tool_call>\s*(\{[^}]+\})\s*</tool_call>").ok();
-
+        // 格式 1: <tool_call>...</tool_call> (Hermes-style，支持多行 JSON)
+        let re = regex::Regex::new(r"(?s)<tool_call>\s*(\{.*?\})\s*</tool_call>").ok();
         if let Some(re) = re {
             for cap in re.captures_iter(response) {
                 if let Some(json_str) = cap.get(1) {
-                    if let Ok(tool_call) = serde_json::from_str::<ToolCall>(json_str.as_str()) {
+                    // 清理 JSON 字符串中的换行和多余空格
+                    let cleaned = json_str.as_str().trim();
+                    if let Ok(tool_call) = serde_json::from_str::<ToolCall>(cleaned) {
                         tool_calls.push(tool_call);
                     }
                 }
             }
         }
 
-        // 备用解析：Qwen 风格的 function call
+        // 格式 2: Qwen 风格的 function call (备用)
         if tool_calls.is_empty() {
             let qwen_re =
-                regex::Regex::new(r#"✿FUNCTION✿:\s*(\w+)\s*\n✿ARGS✿:\s*(\{[^✿]+\})"#).ok();
+                regex::Regex::new(r#"(?s)✿FUNCTION✿:\s*(\w+)\s*\n✿ARGS✿:\s*(\{.*?\})(?:\n|$)"#)
+                    .ok();
             if let Some(re) = qwen_re {
                 for cap in re.captures_iter(response) {
                     if let (Some(name), Some(args)) = (cap.get(1), cap.get(2)) {
-                        if let Ok(arguments) = serde_json::from_str(args.as_str()) {
+                        if let Ok(arguments) = serde_json::from_str(args.as_str().trim()) {
+                            tool_calls.push(ToolCall {
+                                name: name.as_str().to_string(),
+                                arguments,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // 格式 3: 直接 JSON 对象 (最后备用)
+        if tool_calls.is_empty() {
+            let json_re = regex::Regex::new(
+                r#"(?s)\{\s*"name"\s*:\s*"([^"]+)"\s*,\s*"arguments"\s*:\s*(\{.*?\})\s*\}"#,
+            )
+            .ok();
+            if let Some(re) = json_re {
+                for cap in re.captures_iter(response) {
+                    if let (Some(name), Some(args)) = (cap.get(1), cap.get(2)) {
+                        if let Ok(arguments) = serde_json::from_str(args.as_str().trim()) {
                             tool_calls.push(ToolCall {
                                 name: name.as_str().to_string(),
                                 arguments,
