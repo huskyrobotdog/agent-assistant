@@ -2,13 +2,46 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/svg+xml" href="/logo.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri + Vue 3 App</title>
+    <title>Agent助手</title>
+    <style>
+      #app-loading {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #fff;
+      }
+      @media (prefers-color-scheme: dark) {
+        #app-loading { background: #09090b; }
+      }
+      .loading-logo {
+        width: 48px;
+        height: 48px;
+        animation: spin 1.5s linear infinite;
+      }
+      .loading-logo.fade-out {
+        animation: spin 1.5s linear infinite, fade-out 0.8s ease-out forwards;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @keyframes fade-out {
+        to {
+          width: 80vmin;
+          height: 80vmin;
+          opacity: 0;
+        }
+      }
+    </style>
   </head>
 
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div id="app-loading">
+        <img src="/logo.svg" class="loading-logo" alt="loading" />
+      </div>
+    </div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
