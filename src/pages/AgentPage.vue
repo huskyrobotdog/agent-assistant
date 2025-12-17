@@ -135,15 +135,13 @@ onMounted(async () => {
     }
   })
 
-  // 监听工具执行结果
+  // 监听工具执行结果（使用 Qwen ReAct Observation 格式）
   unlistenToolResult = await listen('tool-result', (event) => {
     if (streamingMessageId.value) {
       const msg = messages.value.find((m) => m.id === streamingMessageId.value)
       if (msg) {
-        // 使用 Hermes 标准格式 <tool_response>
-        const { name, result, isError } = event.payload
-        const content = JSON.stringify({ name, content: result, is_error: isError })
-        msg.content += `\n<tool_response>${content}</tool_response>\n`
+        const { result } = event.payload
+        msg.content += `\nObservation: ${result}\n`
         nextTick(() => scrollToBottom())
       }
     }

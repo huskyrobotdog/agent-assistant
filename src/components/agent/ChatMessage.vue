@@ -26,104 +26,84 @@ const showThinking = ref(false)
 
 const isUser = computed(() => props.message.role === 'user')
 
-// 解析内容，提取思考/操作/观察等步骤
+// 解析内容，提取思考/操作/观察等步骤（支持 Qwen ReAct 格式）
 const parsedContent = computed(() => {
   const content = props.message.content || ''
-
-  // 解析各种标签
-  const thinkRegex = /<think>([\s\S]*?)<\/think>/g
-  const toolCallRegex = /<tool_call>([\s\S]*?)<\/tool_call>/g
-  const toolResponseRegex = /<tool_response>([\s\S]*?)<\/tool_response>/g
-
-  // 提取所有步骤
   const steps = []
 
-  // 提取思考内容
-  let match
-  while ((match = thinkRegex.exec(content)) !== null) {
-    if (match[1].trim()) {
-      steps.push({ type: 'thought', content: match[1].trim(), index: match.index })
+  // 按行解析 ReAct 格式
+  const lines = content.split('\n')
+  let currentType = null
+  let currentContent = []
+  let finalAnswer = ''
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+
+    if (line.startsWith('Thought:')) {
+      // 保存之前的内容
+      if (currentType && currentContent.length > 0) {
+        steps.push({ type: currentType, content: currentContent.join('\n').trim() })
+      }
+      currentType = 'thought'
+      currentContent = [line.substring(8).trim()]
+    } else if (line.startsWith('Action:')) {
+      if (currentType && currentContent.length > 0) {
+        steps.push({ type: currentType, content: currentContent.join('\n').trim() })
+      }
+      currentType = 'action'
+      currentContent = [line.substring(7).trim()]
+    } else if (line.startsWith('Action Input:')) {
+      // Action Input 追加到 action
+      if (currentType === 'action') {
+        currentContent.push(line.substring(13).trim())
+      }
+    } else if (line.startsWith('Observation:')) {
+      if (currentType && currentContent.length > 0) {
+        steps.push({ type: currentType, content: currentContent.join('\n').trim() })
+      }
+      currentType = 'observation'
+      currentContent = [line.substring(12).trim()]
+    } else if (line.startsWith('Final Answer:')) {
+      if (currentType && currentContent.length > 0) {
+        steps.push({ type: currentType, content: currentContent.join('\n').trim() })
+      }
+      currentType = null
+      currentContent = []
+      finalAnswer = line.substring(13).trim()
+      // 后续所有内容都是 Final Answer
+      for (let j = i + 1; j < lines.length; j++) {
+        finalAnswer += '\n' + lines[j]
+      }
+      finalAnswer = finalAnswer.trim()
+      break
+    } else if (currentType) {
+      // 继续当前类型的内容
+      currentContent.push(line)
     }
   }
 
-  // 提取工具调用
-  while ((match = toolCallRegex.exec(content)) !== null) {
-    if (match[1].trim()) {
-      steps.push({ type: 'action', content: match[1].trim(), index: match.index })
-    }
+  // 保存最后的内容
+  if (currentType && currentContent.length > 0) {
+    steps.push({ type: currentType, content: currentContent.join('\n').trim() })
   }
 
-  // 提取工具结果（观察）- Hermes 标准格式 <tool_response>
-  while ((match = toolResponseRegex.exec(content)) !== null) {
-    try {
-      const data = JSON.parse(match[1].trim())
-      steps.push({
-        type: 'observation',
-        content: `${data.name}: ${data.content}`,
-        isError: data.is_error,
-        index: match.index,
-      })
-    } catch {
-      // 如果 JSON 解析失败，直接显示原始内容
-      steps.push({
-        type: 'observation',
-        content: match[1].trim(),
-        isError: false,
-        index: match.index,
-      })
-    }
-  }
+  // 过滤空步骤
+  const filteredSteps = steps.filter((s) => s.content)
 
-  // 按出现顺序排序
-  steps.sort((a, b) => a.index - b.index)
-
-  // 移除所有标签后的响应内容
-  let responseContent = content.replace(thinkRegex, '').replace(toolCallRegex, '').replace(toolResponseRegex, '')
-
-  // 移除未闭合的标签及其内容（流式中）
-  const thinkOpen = (content.match(/<think>/g) || []).length
-  const thinkClose = (content.match(/<\/think>/g) || []).length
-  const toolOpen = (content.match(/<tool_call>/g) || []).length
-  const toolClose = (content.match(/<\/tool_call>/g) || []).length
-
-  const isStreaming = thinkOpen > thinkClose || toolOpen > toolClose
-
-  if (thinkOpen > thinkClose) {
-    const idx = responseContent.lastIndexOf('<think>')
-    if (idx !== -1) responseContent = responseContent.substring(0, idx)
-  }
-  if (toolOpen > toolClose) {
-    const idx = responseContent.lastIndexOf('<tool_call>')
-    if (idx !== -1) responseContent = responseContent.substring(0, idx)
-  }
+  // 检测流式状态
+  const isStreaming = content.includes('Thought:') && !content.includes('Final Answer:')
 
   return {
-    steps,
-    response: responseContent.trim(),
+    steps: filteredSteps,
+    response: finalAnswer,
     isStreaming,
+    hasFinalAnswer: !!finalAnswer,
   }
 })
 
-// 获取流式步骤（未关闭的标签）
+// 获取流式步骤（已整合到 parsedContent 中，保留兼容）
 const streamingStep = computed(() => {
-  const content = props.message.content || ''
-
-  // 检查未闭合的 think
-  const thinkOpen = (content.match(/<think>/g) || []).length
-  const thinkClose = (content.match(/<\/think>/g) || []).length
-  if (thinkOpen > thinkClose) {
-    const idx = content.lastIndexOf('<think>')
-    return { type: 'thought', content: content.substring(idx + 7).trim() }
-  }
-
-  // 检查未闭合的 tool_call
-  const toolOpen = (content.match(/<tool_call>/g) || []).length
-  const toolClose = (content.match(/<\/tool_call>/g) || []).length
-  if (toolOpen > toolClose) {
-    const idx = content.lastIndexOf('<tool_call>')
-    return { type: 'action', content: content.substring(idx + 11).trim() }
-  }
-
   return null
 })
 

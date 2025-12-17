@@ -194,50 +194,53 @@ impl ReactAgent {
         );
     }
 
-    /// 构建 Hermes-style 系统提示词 (Qwen3 推荐格式)
+    /// 构建 Qwen ReAct 风格系统提示词
     fn build_react_system_prompt(&self) -> String {
         let tools = self.tools.read();
-        let tools_json = if tools.is_empty() {
-            "[]".to_string()
-        } else {
-            let tools_array: Vec<serde_json::Value> = tools
-                .iter()
-                .map(|t| {
-                    serde_json::json!({
-                        "type": "function",
-                        "function": {
-                            "name": t.name,
-                            "description": t.description,
-                            "parameters": t.input_schema
-                        }
-                    })
-                })
-                .collect();
-            serde_json::to_string_pretty(&tools_array).unwrap_or_default()
-        };
+
+        // 构建工具描述
+        let tool_descs: Vec<String> = tools
+            .iter()
+            .map(|t| {
+                format!(
+                    "{}: {}. Parameters: {} Format the arguments as a JSON object.",
+                    t.name,
+                    t.description,
+                    serde_json::to_string(&t.input_schema).unwrap_or_default()
+                )
+            })
+            .collect();
+        let tool_descs_str = tool_descs.join("\n\n");
+
+        // 构建工具名称列表
+        let tool_names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
+        let tool_names_str = tool_names.join(", ");
 
         format!(
-            r#"You are a function calling AI model. You are provided with function signatures within <tools></tools> XML tags. You may call one or more functions to assist with the user query. Don't make assumptions about what values to plug into functions.
+            r#"Answer the following questions as best you can. You have access to the following tools:
 
-<tools>
-{tools_json}
-</tools>
+{tool_descs}
 
-For each function call, return a JSON object with function name and arguments within <tool_call></tool_call> XML tags:
+Use the following format:
 
-<tool_call>
-{{"name": "function_name", "arguments": {{"param": "value"}}}}
-</tool_call>
+Question: the input question you must answer
+Thought: you should always think about what to do
+Action: the action to take, should be one of [{tool_names}]
+Action Input: the input to the action, must be valid JSON
+Observation: the result of the action
+... (this Thought/Action/Action Input/Observation can be repeated zero or more times)
+Thought: I now know the final answer
+Final Answer: the final answer to the original input question
 
-After calling a tool, you will receive the result within <tool_response></tool_response> XML tags.
+Important:
+- Always respond in the same language as the user's question
+- Action Input must be a valid JSON object
+- Wait for Observation before continuing
+- If no tools are needed, go directly to Final Answer
 
-Guidelines:
-- Call only ONE tool at a time
-- Wait for tool results in <tool_response> before proceeding
-- If a tool fails, try alternative approaches
-- Provide concise final answers
-- Always respond in the same language as the user's query"#,
-            tools_json = tools_json
+Begin!"#,
+            tool_descs = tool_descs_str,
+            tool_names = tool_names_str
         )
     }
 
@@ -363,6 +366,9 @@ Guidelines:
         let mut n_cur = batch.n_tokens();
         let mut decoder = encoding_rs::UTF_8.new_decoder();
 
+        // ReAct 模式的 stop word：当模型生成 "Observation" 时停止，等待真正的工具结果
+        const STOP_WORD: &str = "Observation:";
+
         while n_cur < self.config.max_tokens {
             let token = sampler.sample(&ctx, batch.n_tokens() - 1);
             sampler.accept(token);
@@ -380,6 +386,17 @@ Guidelines:
             let _ = decoder.decode_to_string(&token_bytes, &mut token_str, false);
 
             output.push_str(&token_str);
+
+            // 检查 stop word：当检测到 "Observation:" 时停止生成
+            if output.contains(STOP_WORD) {
+                // 移除 stop word，让真正的工具结果来填充
+                if let Some(pos) = output.find(STOP_WORD) {
+                    output.truncate(pos);
+                }
+                #[cfg(debug_assertions)]
+                println!("\n\n🛑 [Stop Word] 检测到 Observation，停止生成");
+                break;
+            }
 
             #[cfg(debug_assertions)]
             {
@@ -417,33 +434,31 @@ Guidelines:
     fn parse_tool_calls(&self, response: &str) -> Vec<ToolCall> {
         let mut tool_calls = Vec::new();
 
-        // 格式 1: <tool_call>...</tool_call> (Hermes-style，支持多行 JSON)
-        let re = regex::Regex::new(r"(?s)<tool_call>\s*(\{.*?\})\s*</tool_call>").ok();
-        if let Some(re) = re {
+        // 格式 1: Qwen ReAct 风格 Action/Action Input (优先)
+        let react_re =
+            regex::Regex::new(r"(?s)Action:\s*(\S+)\s*\nAction Input:\s*(\{.*?\})(?:\n|$)").ok();
+        if let Some(re) = react_re {
             for cap in re.captures_iter(response) {
-                if let Some(json_str) = cap.get(1) {
-                    // 清理 JSON 字符串中的换行和多余空格
-                    let cleaned = json_str.as_str().trim();
-                    if let Ok(tool_call) = serde_json::from_str::<ToolCall>(cleaned) {
-                        tool_calls.push(tool_call);
+                if let (Some(name), Some(args)) = (cap.get(1), cap.get(2)) {
+                    if let Ok(arguments) = serde_json::from_str(args.as_str().trim()) {
+                        tool_calls.push(ToolCall {
+                            name: name.as_str().trim().to_string(),
+                            arguments,
+                        });
                     }
                 }
             }
         }
 
-        // 格式 2: Qwen 风格的 function call (备用)
+        // 格式 2: <tool_call>...</tool_call> (Hermes-style，备用)
         if tool_calls.is_empty() {
-            let qwen_re =
-                regex::Regex::new(r#"(?s)✿FUNCTION✿:\s*(\w+)\s*\n✿ARGS✿:\s*(\{.*?\})(?:\n|$)"#)
-                    .ok();
-            if let Some(re) = qwen_re {
+            let re = regex::Regex::new(r"(?s)<tool_call>\s*(\{.*?\})\s*</tool_call>").ok();
+            if let Some(re) = re {
                 for cap in re.captures_iter(response) {
-                    if let (Some(name), Some(args)) = (cap.get(1), cap.get(2)) {
-                        if let Ok(arguments) = serde_json::from_str(args.as_str().trim()) {
-                            tool_calls.push(ToolCall {
-                                name: name.as_str().to_string(),
-                                arguments,
-                            });
+                    if let Some(json_str) = cap.get(1) {
+                        let cleaned = json_str.as_str().trim();
+                        if let Ok(tool_call) = serde_json::from_str::<ToolCall>(cleaned) {
+                            tool_calls.push(tool_call);
                         }
                     }
                 }
@@ -471,6 +486,12 @@ Guidelines:
         }
 
         tool_calls
+    }
+
+    /// 检查是否包含 Final Answer
+    #[allow(dead_code)]
+    fn has_final_answer(&self, response: &str) -> bool {
+        response.contains("Final Answer:")
     }
 
     /// 提取思考内容
@@ -534,10 +555,11 @@ Guidelines:
                     cb(&result.tool_name, &result.result, result.is_error);
                 }
 
+                // 使用 Observation 格式（Qwen ReAct 风格）
                 let mut messages = self.messages.write();
                 messages.push(Message {
                     role: Role::Tool,
-                    content: format!("工具 {} 执行结果:\n{}", result.tool_name, result.result),
+                    content: format!("Observation: {}", result.result),
                     tool_calls: None,
                     tool_call_id: Some(tool_call.name.clone()),
                 });
