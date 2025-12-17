@@ -7,6 +7,8 @@ import 'primeicons/primeicons.css';
 import '@/style.css';
 import App from '@/App.vue';
 import router from '@/router.js';
+import { invoke } from '@tauri-apps/api/core';
+import { appDataDir, join } from '@tauri-apps/api/path';
 
 const app = createApp(App);
 
@@ -30,7 +32,7 @@ app.use(PrimeVue, {
 app.directive('ripple', Ripple);
 app.directive('tooltip', Tooltip);
 
-const showApp = () => {
+const loadApp = () => {
     const logo = document.querySelector('.loading-logo');
     if (logo) {
         logo.classList.add('fade-out');
@@ -40,4 +42,13 @@ const showApp = () => {
     }
 };
 
-setTimeout(() => showApp(), 1000)
+
+const startApp = async () => {
+    const appData = await appDataDir();
+    const modelPath = await join(appData, 'models', 'Qwen3-4B-Thinking-2507-UD-IQ1_M.gguf');
+    console.log(modelPath)
+    await invoke('init_agent', { modelPath });
+    loadApp()
+}
+
+startApp()
