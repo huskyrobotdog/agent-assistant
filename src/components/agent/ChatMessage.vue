@@ -26,8 +26,92 @@ const showThinking = ref(false)
 
 const isUser = computed(() => props.message.role === 'user')
 
+// 解析内容，提取思考/操作/观察等步骤
+const parsedContent = computed(() => {
+  const content = props.message.content || ''
+
+  // 解析各种标签
+  const thinkRegex = /<think>([\s\S]*?)<\/think>/g
+  const toolCallRegex = /<tool_call>([\s\S]*?)<\/tool_call>/g
+
+  // 提取所有步骤
+  const steps = []
+
+  // 提取思考内容
+  let match
+  while ((match = thinkRegex.exec(content)) !== null) {
+    if (match[1].trim()) {
+      steps.push({ type: 'thought', content: match[1].trim(), index: match.index })
+    }
+  }
+
+  // 提取工具调用
+  while ((match = toolCallRegex.exec(content)) !== null) {
+    if (match[1].trim()) {
+      steps.push({ type: 'action', content: match[1].trim(), index: match.index })
+    }
+  }
+
+  // 按出现顺序排序
+  steps.sort((a, b) => a.index - b.index)
+
+  // 移除所有标签后的响应内容
+  let responseContent = content.replace(thinkRegex, '').replace(toolCallRegex, '')
+
+  // 移除未闭合的标签及其内容（流式中）
+  const thinkOpen = (content.match(/<think>/g) || []).length
+  const thinkClose = (content.match(/<\/think>/g) || []).length
+  const toolOpen = (content.match(/<tool_call>/g) || []).length
+  const toolClose = (content.match(/<\/tool_call>/g) || []).length
+
+  const isStreaming = thinkOpen > thinkClose || toolOpen > toolClose
+
+  if (thinkOpen > thinkClose) {
+    const idx = responseContent.lastIndexOf('<think>')
+    if (idx !== -1) responseContent = responseContent.substring(0, idx)
+  }
+  if (toolOpen > toolClose) {
+    const idx = responseContent.lastIndexOf('<tool_call>')
+    if (idx !== -1) responseContent = responseContent.substring(0, idx)
+  }
+
+  return {
+    steps,
+    response: responseContent.trim(),
+    isStreaming,
+  }
+})
+
+// 获取流式步骤（未关闭的标签）
+const streamingStep = computed(() => {
+  const content = props.message.content || ''
+
+  // 检查未闭合的 think
+  const thinkOpen = (content.match(/<think>/g) || []).length
+  const thinkClose = (content.match(/<\/think>/g) || []).length
+  if (thinkOpen > thinkClose) {
+    const idx = content.lastIndexOf('<think>')
+    return { type: 'thought', content: content.substring(idx + 7).trim() }
+  }
+
+  // 检查未闭合的 tool_call
+  const toolOpen = (content.match(/<tool_call>/g) || []).length
+  const toolClose = (content.match(/<\/tool_call>/g) || []).length
+  if (toolOpen > toolClose) {
+    const idx = content.lastIndexOf('<tool_call>')
+    return { type: 'action', content: content.substring(idx + 11).trim() }
+  }
+
+  return null
+})
+
 const renderedContent = computed(() => {
-  return marked(props.message.content)
+  return marked(parsedContent.value.response)
+})
+
+// 判断是否有步骤要显示
+const hasSteps = computed(() => {
+  return parsedContent.value.steps.length > 0 || streamingStep.value
 })
 
 // 解析 ReAct 思维链步骤
@@ -41,9 +125,18 @@ const hasReactChain = computed(() => {
   return props.message.reactChain && props.message.reactChain.length > 0
 })
 
-// 判断是否有普通思考过程
+// 判断是否有思考过程（兼容旧逻辑）
 const hasThinking = computed(() => {
-  return props.message.thinking && !hasReactChain.value
+  return hasSteps.value && !hasReactChain.value
+})
+
+// 获取所有步骤（包括流式的）
+const allSteps = computed(() => {
+  const steps = [...parsedContent.value.steps]
+  if (streamingStep.value) {
+    steps.push({ ...streamingStep.value, isStreaming: true })
+  }
+  return steps
 })
 
 function toggleThinking() {
@@ -124,28 +217,30 @@ function getStepLabel(type) {
           </div>
         </div>
 
-        <!-- 普通思维链 -->
+        <!-- 思考/操作过程 - 时间线UI -->
         <div
           v-else-if="hasThinking"
-          class="thinking-toggle mb-2">
-          <button
-            class="flex items-center gap-1 text-xs text-surface-500 hover:text-surface-700 dark:hover:text-surface-300 transition-colors"
-            @click="toggleThinking">
-            <i
-              class="pi"
-              :class="showThinking ? 'pi-chevron-down' : 'pi-chevron-right'" />
-            <i class="pi pi-lightbulb" />
-            <span>思考过程</span>
-          </button>
+          class="thinking-timeline mb-3">
           <div
-            v-show="showThinking"
-            class="thinking-content">
-            {{ message.thinking }}
+            v-for="(step, index) in allSteps"
+            :key="index"
+            class="timeline-item"
+            :class="[getStepStyle(step.type).color, { 'is-streaming': step.isStreaming }]">
+            <div class="timeline-marker">
+              <i
+                class="pi"
+                :class="getStepStyle(step.type).icon" />
+            </div>
+            <div class="timeline-content">
+              <div class="timeline-label">{{ getStepLabel(step.type) }}</div>
+              <div class="timeline-text selectable">{{ step.content }}</div>
+            </div>
           </div>
         </div>
 
-        <!-- Markdown 内容 -->
+        <!-- Markdown 内容（只在有响应内容时显示） -->
         <div
+          v-if="parsedContent.response"
           class="markdown-content selectable"
           v-html="renderedContent" />
       </template>
@@ -161,29 +256,153 @@ function getStepLabel(type) {
 }
 
 .message-bubble.assistant-message {
-  background-color: var(--p-surface-100);
-  padding: 0.75rem 1rem;
+  background-color: transparent;
+  padding: 0;
 }
 
-:deep(.app-dark) .message-bubble.assistant-message,
-.app-dark .message-bubble.assistant-message {
-  background-color: var(--p-surface-800);
+/* 时间线样式 */
+.thinking-timeline {
+  position: relative;
+  padding-left: 1.5rem;
 }
 
-.thinking-content {
-  margin-top: 0.5rem;
-  padding: 0.75rem;
-  background-color: color-mix(in srgb, var(--p-surface-200) 50%, transparent);
-  border-radius: 0.25rem;
-  font-size: 0.875rem;
+.thinking-timeline::before {
+  content: '';
+  position: absolute;
+  left: 0.4375rem;
+  top: 0.5rem;
+  bottom: 0.5rem;
+  width: 2px;
+  background: linear-gradient(180deg, #f59e0b 0%, #3b82f6 100%);
+  opacity: 0.4;
+}
+
+.timeline-item {
+  position: relative;
+  padding-bottom: 0.75rem;
+}
+
+.timeline-item:last-child {
+  padding-bottom: 0;
+}
+
+.timeline-marker {
+  position: absolute;
+  left: -1.5rem;
+  top: 0;
+  width: 1rem;
+  height: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--p-surface-0);
+  border-radius: 50%;
+  z-index: 1;
+}
+
+.timeline-marker i {
+  font-size: 0.75rem;
+  color: #f59e0b;
+}
+
+/* 思考类型 - 橙色 */
+.timeline-item.thought .timeline-marker i {
+  color: #f59e0b;
+}
+
+.timeline-item.thought .timeline-content {
+  background-color: color-mix(in srgb, #f59e0b 8%, transparent);
+  border-color: color-mix(in srgb, #f59e0b 20%, transparent);
+}
+
+.timeline-item.thought .timeline-label {
+  color: #d97706;
+}
+
+/* 操作类型 - 蓝色 */
+.timeline-item.action .timeline-marker i {
+  color: #3b82f6;
+}
+
+.timeline-item.action .timeline-content {
+  background-color: color-mix(in srgb, #3b82f6 8%, transparent);
+  border-color: color-mix(in srgb, #3b82f6 20%, transparent);
+}
+
+.timeline-item.action .timeline-label {
+  color: #2563eb;
+}
+
+/* 观察类型 - 绿色 */
+.timeline-item.observation .timeline-marker i {
+  color: #10b981;
+}
+
+.timeline-item.observation .timeline-content {
+  background-color: color-mix(in srgb, #10b981 8%, transparent);
+  border-color: color-mix(in srgb, #10b981 20%, transparent);
+}
+
+.timeline-item.observation .timeline-label {
+  color: #059669;
+}
+
+.timeline-item.is-streaming .timeline-marker i {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.timeline-content {
+  background-color: color-mix(in srgb, #f59e0b 8%, transparent);
+  border-radius: 0.375rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid color-mix(in srgb, #f59e0b 20%, transparent);
+}
+
+.timeline-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #d97706;
+  margin-bottom: 0.25rem;
+}
+
+.timeline-text {
+  font-size: 0.8125rem;
+  line-height: 1.5;
   color: var(--p-surface-600);
   white-space: pre-wrap;
-  border-left: 2px solid var(--p-primary-color);
 }
 
-.app-dark .thinking-content {
-  background-color: color-mix(in srgb, var(--p-surface-700) 50%, transparent);
+.app-dark .timeline-marker {
+  background-color: var(--p-surface-900);
+}
+
+.app-dark .timeline-text {
   color: var(--p-surface-400);
+}
+
+.app-dark .timeline-item.thought .timeline-content {
+  background-color: color-mix(in srgb, #f59e0b 12%, transparent);
+  border-color: color-mix(in srgb, #f59e0b 25%, transparent);
+}
+
+.app-dark .timeline-item.action .timeline-content {
+  background-color: color-mix(in srgb, #3b82f6 12%, transparent);
+  border-color: color-mix(in srgb, #3b82f6 25%, transparent);
+}
+
+.app-dark .timeline-item.observation .timeline-content {
+  background-color: color-mix(in srgb, #10b981 12%, transparent);
+  border-color: color-mix(in srgb, #10b981 25%, transparent);
 }
 
 /* ReAct 思维链样式 */

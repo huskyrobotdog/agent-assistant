@@ -124,6 +124,7 @@ def optimized_strategy(data):
 
 const isLoading = ref(false)
 const messagesContainer = ref(null)
+const isUserAtBottom = ref(true)
 
 // 选择对话
 function selectConversation(id) {
@@ -201,10 +202,24 @@ async function handleSend(content) {
 }
 
 // 滚动到底部
-function scrollToBottom() {
-  if (messagesContainer.value) {
+function scrollToBottom(force = false) {
+  if (messagesContainer.value && (force || isUserAtBottom.value)) {
     messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
   }
+}
+
+// 检测用户是否在底部
+function checkIsAtBottom() {
+  if (messagesContainer.value) {
+    const { scrollTop, scrollHeight, clientHeight } = messagesContainer.value
+    // 允许 30px 的误差
+    isUserAtBottom.value = scrollHeight - scrollTop - clientHeight < 30
+  }
+}
+
+// 处理滚动事件
+function handleScroll() {
+  checkIsAtBottom()
 }
 
 // 事件监听器
@@ -212,7 +227,7 @@ let unlistenToken = null
 let unlistenDone = null
 
 onMounted(async () => {
-  scrollToBottom()
+  scrollToBottom(true)
 
   // 监听流式 token
   unlistenToken = await listen('chat-token', (event) => {
@@ -255,7 +270,8 @@ onUnmounted(() => {
       <!-- 消息列表 -->
       <div
         ref="messagesContainer"
-        class="messages-container">
+        class="messages-container"
+        @scroll="handleScroll">
         <ChatMessage
           v-for="msg in messages"
           :key="msg.id"
