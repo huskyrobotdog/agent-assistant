@@ -8,6 +8,7 @@ fn greet(name: &str) -> String {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_sql::Builder::new().build())
         .setup(|app| {
             let app_data = app.path().app_data_dir()?;
             let models_dir = app_data.join("models");
