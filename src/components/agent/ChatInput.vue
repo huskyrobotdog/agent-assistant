@@ -41,13 +41,11 @@ function handleKeydown(event) {
 
 <template>
   <div class="input-wrapper">
-    <!-- 旋转光晕 -->
-    <div
-      v-if="loading"
-      class="glow-wrapper">
-      <div class="glow-spot"></div>
-    </div>
     <div class="input-outer">
+      <!-- 跑马灯边框 -->
+      <div
+        v-if="loading"
+        class="loading-border"></div>
       <div class="input-container">
         <Textarea
           v-model="inputMessage"
@@ -83,38 +81,27 @@ function handleKeydown(event) {
   border-color: var(--p-surface-700);
 }
 
-/* 旋转光晕容器 */
-.glow-wrapper {
+/* 跑马灯边框 */
+.loading-border {
   position: absolute;
-  top: 0.75rem;
-  left: 0.75rem;
-  right: 0.75rem;
-  bottom: 0.75rem;
-  border-radius: 0.75rem;
-  overflow: hidden;
-}
-
-/* 旋转的光斑 - 单条彩虹光带 */
-.glow-spot {
-  position: absolute;
-  width: 200%;
-  height: 200%;
   top: 50%;
   left: 50%;
+  width: 500%;
+  height: 500%;
   transform: translate(-50%, -50%);
   background: conic-gradient(
     from 0deg,
     transparent 0deg,
-    transparent 315deg,
-    #3b82f6 325deg,
-    #22c55e 335deg,
-    #eab308 345deg,
-    #f97316 352deg,
-    #ef4444 358deg,
+    transparent 270deg,
+    #3b82f6 300deg,
+    #22c55e 315deg,
+    #eab308 330deg,
+    #f97316 345deg,
+    #ef4444 355deg,
     transparent 360deg
   );
-  animation: rotate-glow 2s linear infinite;
-  filter: blur(12px);
+  animation: rotate-glow 1s linear infinite;
+  z-index: 0;
   opacity: 1;
 }
 
@@ -130,9 +117,10 @@ function handleKeydown(event) {
 .input-outer {
   position: relative;
   border-radius: 0.75rem;
-  padding: 1px;
+  padding: 2px;
   background: var(--p-surface-200);
   z-index: 1;
+  overflow: hidden;
 }
 
 .app-dark .input-outer {
