@@ -81,6 +81,8 @@ pub struct AgentConfig {
     pub temperature: f32,
     pub top_p: f32,
     pub top_k: i32,
+    pub min_p: f32,
+    pub presence_penalty: f32,
     pub max_tokens: i32,
     pub seed: u32,
 }
@@ -95,6 +97,8 @@ impl Default for AgentConfig {
             temperature: 0.6,
             top_p: 0.95,
             top_k: 20,
+            min_p: 0.0,            // Qwen3 推荐 0.0
+            presence_penalty: 1.5, // 减少重复
             max_tokens: 4096,
             seed: 1234,
         }
@@ -348,8 +352,15 @@ impl ReactAgent {
             .map_err(|e| AgentError::InferenceError(format!("解码失败: {}", e)))?;
 
         let mut sampler = LlamaSampler::chain_simple([
+            LlamaSampler::penalties(
+                64,                           // 惩罚窗口大小
+                1.1,                          // repeat_penalty
+                0.0,                          // frequency_penalty
+                self.config.presence_penalty, // presence_penalty
+            ),
             LlamaSampler::top_k(self.config.top_k),
             LlamaSampler::top_p(self.config.top_p, 1),
+            LlamaSampler::min_p(self.config.min_p, 1), // Qwen3 推荐 0.0
             LlamaSampler::temp(self.config.temperature),
             LlamaSampler::dist(self.config.seed),
         ]);
