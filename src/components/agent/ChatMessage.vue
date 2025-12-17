@@ -524,16 +524,25 @@ function getStepLabel(type) {
 }
 
 .markdown-content :deep(pre) {
-  background-color: var(--p-surface-800);
+  background-color: var(--p-surface-100);
   border-radius: 0.5rem;
   padding: 1rem;
   overflow-x: auto;
   margin: 0.5rem 0;
 }
 
+.app-dark .markdown-content :deep(pre) {
+  background-color: var(--p-surface-800);
+}
+
 .markdown-content :deep(code) {
   font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
   font-size: 0.875rem;
+  color: var(--p-surface-700);
+}
+
+.app-dark .markdown-content :deep(code) {
+  color: var(--p-surface-200);
 }
 
 .markdown-content :deep(:not(pre) > code) {
@@ -572,36 +581,69 @@ function getStepLabel(type) {
   background-color: var(--p-surface-800);
 }
 
-/* highlight.js 代码主题 */
+/* highlight.js 代码主题 - 亮色模式 */
 .markdown-content :deep(.hljs-keyword),
 .markdown-content :deep(.hljs-selector-tag),
 .markdown-content :deep(.hljs-built_in),
 .markdown-content :deep(.hljs-name) {
-  color: #c792ea;
+  color: #7c3aed;
 }
 
 .markdown-content :deep(.hljs-string),
 .markdown-content :deep(.hljs-attr) {
-  color: #c3e88d;
+  color: #16a34a;
 }
 
 .markdown-content :deep(.hljs-number),
 .markdown-content :deep(.hljs-literal) {
-  color: #f78c6c;
+  color: #ea580c;
 }
 
 .markdown-content :deep(.hljs-comment) {
-  color: #546e7a;
+  color: #6b7280;
   font-style: italic;
 }
 
 .markdown-content :deep(.hljs-function .hljs-title),
 .markdown-content :deep(.hljs-title.function_) {
-  color: #82aaff;
+  color: #2563eb;
 }
 
 .markdown-content :deep(.hljs-variable),
 .markdown-content :deep(.hljs-params) {
+  color: #374151;
+}
+
+/* highlight.js 代码主题 - 暗色模式 */
+.app-dark .markdown-content :deep(.hljs-keyword),
+.app-dark .markdown-content :deep(.hljs-selector-tag),
+.app-dark .markdown-content :deep(.hljs-built_in),
+.app-dark .markdown-content :deep(.hljs-name) {
+  color: #c792ea;
+}
+
+.app-dark .markdown-content :deep(.hljs-string),
+.app-dark .markdown-content :deep(.hljs-attr) {
+  color: #c3e88d;
+}
+
+.app-dark .markdown-content :deep(.hljs-number),
+.app-dark .markdown-content :deep(.hljs-literal) {
+  color: #f78c6c;
+}
+
+.app-dark .markdown-content :deep(.hljs-comment) {
+  color: #546e7a;
+  font-style: italic;
+}
+
+.app-dark .markdown-content :deep(.hljs-function .hljs-title),
+.app-dark .markdown-content :deep(.hljs-title.function_) {
+  color: #82aaff;
+}
+
+.app-dark .markdown-content :deep(.hljs-variable),
+.app-dark .markdown-content :deep(.hljs-params) {
   color: #eeffff;
 }
 </style>
