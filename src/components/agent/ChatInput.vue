@@ -92,15 +92,14 @@ function handleKeydown(event) {
   background: conic-gradient(
     from 0deg,
     transparent 0deg,
-    transparent 270deg,
-    #3b82f6 300deg,
-    #22c55e 315deg,
-    #eab308 330deg,
-    #f97316 345deg,
-    #ef4444 355deg,
+    transparent 290deg,
+    #3b82f6 320deg,
+    #8b5cf6 330deg,
+    #ec4899 340deg,
+    #ef4444 350deg,
     transparent 360deg
   );
-  animation: rotate-glow 3s linear infinite;
+  animation: rotate-glow 2.5s linear infinite;
   z-index: 0;
   opacity: 1;
 }
