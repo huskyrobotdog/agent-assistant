@@ -30,7 +30,7 @@ fn greet(name: &str) -> String {
 
 /// 初始化 Agent
 #[tauri::command]
-fn init_agent(
+async fn init_agent(
     state: tauri::State<'_, TauriAgentState>,
     model_path: String,
     n_ctx: Option<u32>,
@@ -45,7 +45,11 @@ fn init_agent(
         ..Default::default()
     };
 
-    let agent = ReactAgent::new(config).map_err(|e| e.to_string())?;
+    // 在后台线程加载模型，避免阻塞主线程
+    let agent = tokio::task::spawn_blocking(move || ReactAgent::new(config))
+        .await
+        .map_err(|e| format!("任务执行失败: {}", e))?
+        .map_err(|e| e.to_string())?;
 
     *state.agent.write() = Some(Arc::new(agent));
 
@@ -54,7 +58,7 @@ fn init_agent(
 
 /// 发送消息给 Agent（流式）
 #[tauri::command]
-fn chat(
+async fn chat(
     app: tauri::AppHandle,
     state: tauri::State<'_, TauriAgentState>,
     message: String,
@@ -67,15 +71,18 @@ fn chat(
         .ok_or_else(|| "Agent 未初始化".to_string())?;
 
     let max_iter = max_iterations.unwrap_or(10);
+    let app_clone = app.clone();
 
-    // 使用回调发送流式 token
-    let callback = |token: &str| {
-        let _ = app.emit("chat-token", token.to_string());
-    };
-
-    let response = agent
-        .run_with_callback(&message, max_iter, Some(&callback))
-        .map_err(|e| e.to_string())?;
+    // 在后台线程执行推理，避免阻塞主线程
+    let response = tokio::task::spawn_blocking(move || {
+        let callback = |token: &str| {
+            let _ = app_clone.emit("chat-token", token.to_string());
+        };
+        agent.run_with_callback(&message, max_iter, Some(&callback))
+    })
+    .await
+    .map_err(|e| format!("任务执行失败: {}", e))?
+    .map_err(|e| e.to_string())?;
 
     // 发送完成事件
     let _ = app.emit("chat-done", response.clone());
