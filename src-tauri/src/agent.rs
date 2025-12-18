@@ -480,11 +480,19 @@ Begin!"#,
             n_cur += 1;
         }
 
+        let generated_tokens = n_cur - tokens.len() as i32;
+
         #[cfg(debug_assertions)]
-        println!(
-            "\n\n✅ [推理完成] 共生成 {} 个 token",
-            n_cur - tokens.len() as i32
-        );
+        println!("\n\n✅ [推理完成] 共生成 {} 个 token", generated_tokens);
+
+        // 如果生成 0 token，可能是上下文过长导致模型困惑
+        if generated_tokens == 0 && output.is_empty() {
+            #[cfg(debug_assertions)]
+            println!("\n⚠️ [警告] 模型生成 0 token，可能是上下文过长");
+
+            // 返回提示信息而不是空字符串
+            output = "[模型无法生成响应，请尝试清空对话或简化问题]".to_string();
+        }
 
         *self.state.write() = AgentState::Idle;
         Ok(output)
