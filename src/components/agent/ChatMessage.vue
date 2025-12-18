@@ -299,8 +299,17 @@ function getStepLabel(type) {
   top: 0.5rem;
   bottom: 0.5rem;
   width: 2px;
-  background: linear-gradient(180deg, #f59e0b 0%, #3b82f6 100%);
-  opacity: 0.4;
+  background: linear-gradient(
+    180deg,
+    #ef4444 0%,
+    #f97316 16%,
+    #eab308 32%,
+    #22c55e 48%,
+    #3b82f6 64%,
+    #8b5cf6 80%,
+    #ec4899 100%
+  );
+  opacity: 0.6;
 }
 
 .timeline-item {
