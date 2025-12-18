@@ -100,7 +100,7 @@ const TOP_P: f32 = 0.85;
 const TOP_K: i32 = 20;
 const MIN_P: f32 = 0.0;
 const PRESENCE_PENALTY: f32 = 1.0;
-const MAX_TOKENS: i32 = 4096;
+const MAX_TOKENS: i32 = 32768;
 const SEED: u32 = 1234;
 const MAX_TOOL_CALLS: usize = 1024;
 
