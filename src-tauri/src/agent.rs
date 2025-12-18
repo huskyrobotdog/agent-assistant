@@ -1,4 +1,4 @@
-use crate::tool::{McpTool, ToolCall, ToolResult};
+use crate::mcp::{McpTool, ToolCall, ToolResult};
 use anyhow::{Context, Result};
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::context::LlamaContext;
