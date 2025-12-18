@@ -88,6 +88,8 @@ const parsedContent = computed(() => {
   const lines = content.split('\n')
   let currentType = null
   let currentContent = []
+  let currentToolName = ''
+  let currentToolInput = ''
   let summary = ''
   let remainingContent = [] // 非 CoT 格式的剩余内容
   let inThinkBlock = false
@@ -129,26 +131,45 @@ const parsedContent = computed(() => {
     } else if (line.startsWith('Tool:')) {
       if (currentType && currentContent.length > 0) {
         const cleaned = cleanContent(currentContent.join('\n'))
-        if (cleaned) steps.push({ type: currentType, content: cleaned })
+        if (cleaned)
+          steps.push({ type: currentType, content: cleaned, toolName: currentToolName, toolInput: currentToolInput })
       }
       currentType = 'tool'
-      currentContent = [line.substring(5).trim()]
+      currentToolName = line.substring(5).trim()
+      currentToolInput = ''
+      currentContent = []
     } else if (line.startsWith('Tool Input:')) {
-      // Tool Input 追加到 tool
+      // Tool Input 作为工具内容（可能是多行 JSON）
       if (currentType === 'tool') {
-        currentContent.push(line.substring(11).trim())
+        currentToolInput = line.substring(11).trim()
+        currentContent = [currentToolInput]
       }
+    } else if (
+      currentType === 'tool' &&
+      currentToolInput &&
+      !line.startsWith('Result:') &&
+      !line.startsWith('Summary:') &&
+      !line.startsWith('Tool:') &&
+      !line.match(/^Step\s*\d+:/)
+    ) {
+      // 多行 Tool Input 继续累积
+      currentToolInput += '\n' + line
+      currentContent.push(line)
     } else if (line.startsWith('Result:')) {
       if (currentType && currentContent.length > 0) {
         const cleaned = cleanContent(currentContent.join('\n'))
-        if (cleaned) steps.push({ type: currentType, content: cleaned })
+        if (cleaned)
+          steps.push({ type: currentType, content: cleaned, toolName: currentToolName, toolInput: currentToolInput })
       }
       currentType = 'result'
+      currentToolName = ''
+      currentToolInput = ''
       currentContent = [line.substring(7).trim()]
     } else if (line.startsWith('Summary:')) {
       if (currentType && currentContent.length > 0) {
         const cleaned = cleanContent(currentContent.join('\n'))
-        if (cleaned) steps.push({ type: currentType, content: cleaned })
+        if (cleaned)
+          steps.push({ type: currentType, content: cleaned, toolName: currentToolName, toolInput: currentToolInput })
       }
       currentType = null
       currentContent = []
@@ -184,7 +205,8 @@ const parsedContent = computed(() => {
   // 保存最后的内容
   if (currentType && currentContent.length > 0) {
     const cleaned = cleanContent(currentContent.join('\n'))
-    if (cleaned) steps.push({ type: currentType, content: cleaned })
+    if (cleaned)
+      steps.push({ type: currentType, content: cleaned, toolName: currentToolName, toolInput: currentToolInput })
   }
 
   // 如果没有 Summary 但有剩余内容，把剩余内容当作 response
@@ -250,12 +272,14 @@ function toggleThinking() {
 // 获取步骤类型的图标和颜色
 function getStepStyle(type) {
   switch (type) {
+    case 'thinking':
+      return { icon: 'pi-lightbulb', color: 'thinking' }
     case 'planning':
       return { icon: 'pi-list-check', color: 'planning' }
     case 'step':
       return { icon: 'pi-play', color: 'step' }
     case 'tool':
-      return { icon: 'pi-bolt', color: 'tool' }
+      return { icon: 'pi-wrench', color: 'tool' }
     case 'result':
       return { icon: 'pi-check-circle', color: 'result' }
     default:
@@ -263,14 +287,17 @@ function getStepStyle(type) {
   }
 }
 
-function getStepLabel(type) {
+function getStepLabel(step) {
+  const type = typeof step === 'string' ? step : step.type
   switch (type) {
+    case 'thinking':
+      return '推理'
     case 'planning':
       return '任务规划'
     case 'step':
       return '执行步骤'
     case 'tool':
-      return '工具调用'
+      return step.toolName ? `使用工具 - ${step.toolName}` : '使用工具'
     case 'result':
       return '执行结果'
     default:
@@ -293,7 +320,7 @@ function getStepLabel(type) {
 
       <!-- AI 消息 -->
       <template v-else>
-        <!-- Think 思考过程 -->
+        <!-- Think 推理过程 -->
         <div
           v-if="hasThinkingContent"
           class="thinking-block mb-3">
@@ -304,7 +331,7 @@ function getStepLabel(type) {
               class="pi text-xs"
               :class="showThinking ? 'pi-chevron-down' : 'pi-chevron-right'" />
             <i class="pi pi-lightbulb text-amber-500" />
-            <span>思考过程</span>
+            <span>推理</span>
           </button>
           <Transition name="fade-slide">
             <div
@@ -340,9 +367,19 @@ function getStepLabel(type) {
                 <i
                   class="pi"
                   :class="getStepStyle(step.type).icon" />
-                <span class="step-label">{{ getStepLabel(step.type) }}</span>
+                <span class="step-label">{{ getStepLabel(step) }}</span>
               </div>
-              <div class="step-content selectable">{{ step.content }}</div>
+              <!-- 工具调用特殊显示 -->
+              <div
+                v-if="step.type === 'tool' && step.toolInput"
+                class="tool-input-box">
+                <pre class="tool-input-code">{{ step.toolInput }}</pre>
+              </div>
+              <div
+                v-else
+                class="step-content selectable">
+                {{ step.content }}
+              </div>
             </div>
           </div>
         </div>
@@ -363,8 +400,18 @@ function getStepLabel(type) {
                   :class="getStepStyle(step.type).icon" />
               </div>
               <div class="timeline-content">
-                <div class="timeline-label">{{ getStepLabel(step.type) }}</div>
-                <div class="timeline-text selectable text-animate">{{ step.content }}</div>
+                <div class="timeline-label">{{ getStepLabel(step) }}</div>
+                <!-- 工具调用特殊显示：固定高度的代码区域 -->
+                <div
+                  v-if="step.type === 'tool' && step.toolInput"
+                  class="tool-input-box">
+                  <pre class="tool-input-code">{{ step.toolInput }}</pre>
+                </div>
+                <div
+                  v-else
+                  class="timeline-text selectable text-animate">
+                  {{ step.content }}
+                </div>
               </div>
             </div>
           </TransitionGroup>
@@ -537,6 +584,52 @@ function getStepLabel(type) {
 
 .timeline-item.result .timeline-label {
   color: #059669;
+}
+
+/* 工具输入框样式 - 固定高度可滚动 */
+.tool-input-box {
+  max-height: 120px;
+  overflow-y: auto;
+  background-color: var(--p-surface-100);
+  border-radius: 0.375rem;
+  margin-top: 0.25rem;
+}
+
+.app-dark .tool-input-box {
+  background-color: var(--p-surface-800);
+}
+
+.tool-input-code {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  font-family: ui-monospace, 'Fira Code', 'Monaco', 'Consolas', monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--p-surface-700);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.app-dark .tool-input-code {
+  color: var(--p-surface-300);
+}
+
+/* 滚动条样式 */
+.tool-input-box::-webkit-scrollbar {
+  width: 4px;
+}
+
+.tool-input-box::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tool-input-box::-webkit-scrollbar-thumb {
+  background-color: var(--p-surface-300);
+  border-radius: 2px;
+}
+
+.app-dark .tool-input-box::-webkit-scrollbar-thumb {
+  background-color: var(--p-surface-600);
 }
 
 .timeline-item.is-streaming .timeline-marker i {
