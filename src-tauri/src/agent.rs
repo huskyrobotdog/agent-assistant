@@ -77,12 +77,9 @@ pub fn init(model_path: PathBuf) -> Result<()> {
 
 /// 执行工具调用（通过 MCP_MANAGER）
 fn execute_tool(tool_call: &ToolCall) -> Result<ToolResult> {
-    // 在当前线程创建一个新的 tokio runtime 来执行异步调用
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-
-    rt.block_on(crate::mcp::MCP_MANAGER.execute_tool(&tool_call.name, tool_call.arguments.clone()))
+    tauri::async_runtime::block_on(
+        crate::mcp::MCP_MANAGER.execute_tool(&tool_call.name, tool_call.arguments.clone()),
+    )
 }
 
 /// 使用全局 Agent 进行对话
