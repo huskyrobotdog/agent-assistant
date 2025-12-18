@@ -220,8 +220,18 @@ async fn chat(
         let (response, tool_calls) = step_result;
         final_response = response.clone();
 
+        #[cfg(debug_assertions)]
+        println!(
+            "\n📊 [循环状态] iterations={}, tool_calls.len()={}",
+            iterations,
+            tool_calls.len()
+        );
+
         if tool_calls.is_empty() {
             // 没有工具调用，对话完成
+            #[cfg(debug_assertions)]
+            println!("🛑 [准备退出循环] 无工具调用");
+
             tauri::async_runtime::spawn_blocking(move || {
                 if let Some(agent) = AGENT.read().as_ref() {
                     agent.add_assistant_response(&response);
@@ -229,6 +239,9 @@ async fn chat(
             })
             .await
             .map_err(|e| format!("添加响应失败: {}", e))?;
+
+            #[cfg(debug_assertions)]
+            println!("🛑 [执行 break]");
             break;
         }
 
