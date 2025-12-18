@@ -26,6 +26,28 @@ const showThinking = ref(false)
 
 const isUser = computed(() => props.message.role === 'user')
 
+// 提取 think 块内容
+const thinkingContent = computed(() => {
+  const content = props.message.content || ''
+  const thinkBlocks = []
+  const regex = /<think>([\s\S]*?)<\/think>/g
+  let match
+  while ((match = regex.exec(content)) !== null) {
+    const text = match[1].trim()
+    if (text) thinkBlocks.push(text)
+  }
+  // 检查未闭合的 <think> 块
+  const lastOpenIdx = content.lastIndexOf('<think>')
+  const lastCloseIdx = content.lastIndexOf('</think>')
+  if (lastOpenIdx > lastCloseIdx) {
+    const unclosed = content.substring(lastOpenIdx + 7).trim()
+    if (unclosed) thinkBlocks.push(unclosed + ' ...')
+  }
+  return thinkBlocks.join('\n\n')
+})
+
+const hasThinkingContent = computed(() => !!thinkingContent.value)
+
 // 清理内容：移除 <think> 标签及其内容
 function cleanContent(text) {
   // 移除 <think>...</think> 标签及内容
@@ -46,17 +68,44 @@ const parsedContent = computed(() => {
   const content = props.message.content || ''
   const steps = []
 
+  // 先清理 think 标签
+  const cleanedContent = cleanContent(content)
+
+  // 检测是否是 CoT 格式（包含 Planning: 或 Step X: 等标记）
+  const isCotFormat = /^(Planning:|Step\s*\d+:)/m.test(cleanedContent)
+
+  // 如果不是 CoT 格式，直接返回清理后的内容作为 response
+  if (!isCotFormat) {
+    return {
+      steps: [],
+      response: cleanedContent,
+      isStreaming: false,
+      hasSummary: true,
+    }
+  }
+
   // 按行解析 CoT 格式
   const lines = content.split('\n')
   let currentType = null
   let currentContent = []
   let summary = ''
+  let remainingContent = [] // 非 CoT 格式的剩余内容
+  let inThinkBlock = false
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
 
-    // 跳过 <think> 标签行
-    if (line.includes('<think>') || line.includes('</think>')) {
+    // 跟踪 <think> 块
+    if (line.includes('<think>')) {
+      inThinkBlock = true
+      continue
+    }
+    if (line.includes('</think>')) {
+      inThinkBlock = false
+      continue
+    }
+    // 跳过 think 块内的内容
+    if (inThinkBlock) {
       continue
     }
 
@@ -68,6 +117,7 @@ const parsedContent = computed(() => {
       }
       currentType = 'planning'
       currentContent = [line.substring(9).trim()]
+      remainingContent = [] // 进入 CoT 模式，清空剩余内容
     } else if (line.match(/^Step\s*\d+:/)) {
       if (currentType && currentContent.length > 0) {
         const cleaned = cleanContent(currentContent.join('\n'))
@@ -75,6 +125,7 @@ const parsedContent = computed(() => {
       }
       currentType = 'step'
       currentContent = [line.replace(/^Step\s*\d+:\s*/, '').trim()]
+      remainingContent = []
     } else if (line.startsWith('Tool:')) {
       if (currentType && currentContent.length > 0) {
         const cleaned = cleanContent(currentContent.join('\n'))
@@ -109,10 +160,24 @@ const parsedContent = computed(() => {
       summary = cleanContent(summary)
       break
     } else if (currentType) {
-      // 继续当前类型的内容（跳过只包含 "Result" 的行）
-      if (line.trim() !== 'Result' && !line.startsWith('<think>')) {
+      // 检测到 Markdown 标题或表格，结束当前 CoT 步骤，开始累积为最终响应
+      if (line.match(/^#+\s/) || line.match(/^\|.*\|$/)) {
+        // 保存当前步骤
+        if (currentContent.length > 0) {
+          const cleaned = cleanContent(currentContent.join('\n'))
+          if (cleaned) steps.push({ type: currentType, content: cleaned })
+        }
+        currentType = null
+        currentContent = []
+        // 开始累积剩余内容
+        remainingContent.push(line)
+      } else if (line.trim() !== 'Result') {
+        // 继续当前类型的内容
         currentContent.push(line)
       }
+    } else {
+      // 不在任何 CoT 类型中，累积为剩余内容
+      remainingContent.push(line)
     }
   }
 
@@ -122,8 +187,14 @@ const parsedContent = computed(() => {
     if (cleaned) steps.push({ type: currentType, content: cleaned })
   }
 
+  // 如果没有 Summary 但有剩余内容，把剩余内容当作 response
+  if (!summary && remainingContent.length > 0) {
+    summary = cleanContent(remainingContent.join('\n'))
+  }
+
   // 检测流式状态
-  const isStreaming = (content.includes('Planning:') || content.includes('Step')) && !content.includes('Summary:')
+  const isStreaming =
+    (content.includes('Planning:') || content.includes('Step')) && !content.includes('Summary:') && !summary
 
   return {
     steps,
@@ -222,6 +293,28 @@ function getStepLabel(type) {
 
       <!-- AI 消息 -->
       <template v-else>
+        <!-- Think 思考过程 -->
+        <div
+          v-if="hasThinkingContent"
+          class="thinking-block mb-3">
+          <button
+            class="flex items-center gap-1.5 text-xs text-surface-500 hover:text-surface-700 dark:hover:text-surface-300 transition-colors"
+            @click="showThinking = !showThinking">
+            <i
+              class="pi text-xs"
+              :class="showThinking ? 'pi-chevron-down' : 'pi-chevron-right'" />
+            <i class="pi pi-lightbulb text-amber-500" />
+            <span>思考过程</span>
+          </button>
+          <Transition name="fade-slide">
+            <div
+              v-show="showThinking"
+              class="thinking-content">
+              <pre class="whitespace-pre-wrap text-sm">{{ thinkingContent }}</pre>
+            </div>
+          </Transition>
+        </div>
+
         <!-- CoT 思维链 -->
         <div
           v-if="hasCotChain"
@@ -297,6 +390,43 @@ function getStepLabel(type) {
 .message-bubble.assistant-message {
   background-color: transparent;
   padding: 0;
+}
+
+/* Think 思考过程样式 */
+.thinking-block {
+  border-left: 2px solid #f59e0b;
+  padding-left: 0.75rem;
+}
+
+.thinking-content {
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  background-color: color-mix(in srgb, #f59e0b 8%, transparent);
+  border-radius: 0.375rem;
+  color: var(--p-surface-600);
+  font-family: ui-monospace, monospace;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.app-dark .thinking-content {
+  background-color: color-mix(in srgb, #f59e0b 12%, transparent);
+  color: var(--p-surface-400);
+}
+
+/* 动画 */
+.fade-slide-enter-active,
+.fade-slide-leave-active {
+  transition: all 0.3s ease;
+}
+
+.fade-slide-enter-from,
+.fade-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
+  max-height: 0;
 }
 
 /* 时间线样式 */
