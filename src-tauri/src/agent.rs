@@ -1,3 +1,4 @@
+use anyhow::{Context, Result};
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
@@ -10,22 +11,6 @@ use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::sync::Arc;
-use thiserror::Error;
-
-/// Agent 错误类型
-#[derive(Error, Debug)]
-pub enum AgentError {
-    #[error("模型加载失败: {0}")]
-    ModelLoadError(String),
-    #[error("推理错误: {0}")]
-    InferenceError(String),
-    #[error("工具执行错误: {0}")]
-    ToolExecutionError(String),
-    #[error("解析错误: {0}")]
-    ParseError(String),
-    #[error("MCP 错误: {0}")]
-    McpError(String),
-}
 
 /// MCP 工具定义
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,7 +113,7 @@ pub type ToolResultCallbackRef<'a> = Option<&'a dyn Fn(&str, &str, bool)>;
 
 /// MCP 工具执行器 trait
 pub trait McpToolExecutor: Send + Sync {
-    fn execute(&self, tool_call: &ToolCall) -> Result<ToolResult, AgentError>;
+    fn execute(&self, tool_call: &ToolCall) -> Result<ToolResult>;
     fn get_tools(&self) -> Vec<McpTool>;
 }
 
@@ -147,18 +132,17 @@ pub struct CoTAgent {
 
 impl CoTAgent {
     /// 创建新的 Agent
-    pub fn new(config: AgentConfig) -> Result<Self, AgentError> {
+    pub fn new(config: AgentConfig) -> Result<Self> {
         // 禁用 llama 日志
         let log_options = llama_cpp_2::LogOptions::default().with_logs_enabled(false);
         llama_cpp_2::send_logs_to_tracing(log_options);
 
-        let backend = LlamaBackend::init()
-            .map_err(|e| AgentError::ModelLoadError(format!("初始化 llama 后端失败: {}", e)))?;
+        let backend = LlamaBackend::init().context("初始化 llama 后端失败")?;
 
         let model_params = LlamaModelParams::default().with_n_gpu_layers(config.n_gpu_layers);
 
         let model = LlamaModel::load_from_file(&backend, &config.model_path, &model_params)
-            .map_err(|e| AgentError::ModelLoadError(format!("加载模型失败: {}", e)))?;
+            .context("加载模型失败")?;
 
         Ok(Self {
             backend,
@@ -218,7 +202,7 @@ impl CoTAgent {
     pub fn generate_step(
         &self,
         callback: Option<&dyn Fn(&str)>,
-    ) -> Result<(String, Vec<ToolCall>), AgentError> {
+    ) -> Result<(String, Vec<ToolCall>)> {
         let response = self.generate_with_callback(callback)?;
         let tool_calls = self.parse_tool_calls(&response);
         Ok((response, tool_calls))
@@ -353,15 +337,15 @@ Begin!"#,
     }
 
     /// 构建对话上下文
-    fn build_prompt(&self) -> Result<String, AgentError> {
+    fn build_prompt(&self) -> Result<String> {
         let messages = self.messages.read();
 
         let template = self
             .model
             .chat_template(None)
-            .map_err(|e| AgentError::InferenceError(format!("获取 chat template 失败: {}", e)))?;
+            .context("获取 chat template 失败")?;
 
-        let chat_messages: Result<Vec<_>, _> = messages
+        let chat_messages: Result<Vec<_>> = messages
             .iter()
             .map(|m| {
                 let role = match m.role {
@@ -370,8 +354,7 @@ Begin!"#,
                     Role::Assistant => "assistant",
                     Role::Tool => "tool",
                 };
-                LlamaChatMessage::new(role.to_string(), m.content.clone())
-                    .map_err(|e| AgentError::InferenceError(format!("创建消息失败: {}", e)))
+                LlamaChatMessage::new(role.to_string(), m.content.clone()).context("创建消息失败")
             })
             .collect();
 
@@ -379,19 +362,16 @@ Begin!"#,
 
         self.model
             .apply_chat_template(&template, &chat_messages, true)
-            .map_err(|e| AgentError::InferenceError(format!("应用 chat template 失败: {}", e)))
+            .context("应用 chat template 失败")
     }
 
     /// 生成回复
-    pub fn generate(&self) -> Result<String, AgentError> {
+    pub fn generate(&self) -> Result<String> {
         self.generate_with_callback(None)
     }
 
     /// 生成回复（带回调）
-    pub fn generate_with_callback(
-        &self,
-        callback: Option<&dyn Fn(&str)>,
-    ) -> Result<String, AgentError> {
+    pub fn generate_with_callback(&self, callback: Option<&dyn Fn(&str)>) -> Result<String> {
         *self.state.write() = AgentState::Planning;
 
         #[cfg(debug_assertions)]
@@ -421,12 +401,12 @@ Begin!"#,
         let mut ctx = self
             .model
             .new_context(&self.backend, ctx_params)
-            .map_err(|e| AgentError::InferenceError(format!("创建上下文失败: {}", e)))?;
+            .context("创建上下文失败")?;
 
         let tokens = self
             .model
             .str_to_token(&prompt, AddBos::Never) // chat template 已添加 BOS
-            .map_err(|e| AgentError::InferenceError(format!("分词失败: {}", e)))?;
+            .context("分词失败")?;
 
         let mut batch = LlamaBatch::new(self.config.n_ctx as usize, 1);
 
@@ -435,11 +415,10 @@ Begin!"#,
             let is_last = i as i32 == last_index;
             batch
                 .add(*token, i as i32, &[0], is_last)
-                .map_err(|e| AgentError::InferenceError(format!("添加 token 失败: {}", e)))?;
+                .context("添加 token 失败")?;
         }
 
-        ctx.decode(&mut batch)
-            .map_err(|e| AgentError::InferenceError(format!("解码失败: {}", e)))?;
+        ctx.decode(&mut batch).context("解码失败")?;
 
         // Qwen3 推荐采样顺序: temp → top_k → top_p → min_p → dist
         let mut sampler = LlamaSampler::chain_simple([
@@ -474,7 +453,7 @@ Begin!"#,
             let token_bytes = self
                 .model
                 .token_to_bytes(token, Special::Tokenize)
-                .map_err(|e| AgentError::InferenceError(format!("转换 token 失败: {}", e)))?;
+                .context("转换 token 失败")?;
 
             let mut token_str = String::with_capacity(32);
             let _ = decoder.decode_to_string(&token_bytes, &mut token_str, false);
@@ -506,10 +485,9 @@ Begin!"#,
             batch.clear();
             batch
                 .add(token, n_cur, &[0], true)
-                .map_err(|e| AgentError::InferenceError(format!("添加 token 失败: {}", e)))?;
+                .context("添加 token 失败")?;
 
-            ctx.decode(&mut batch)
-                .map_err(|e| AgentError::InferenceError(format!("解码失败: {}", e)))?;
+            ctx.decode(&mut batch).context("解码失败")?;
 
             n_cur += 1;
         }
@@ -626,15 +604,12 @@ Begin!"#,
     }
 
     /// 执行单次 CoT 循环
-    pub fn step(&self) -> Result<(String, bool), AgentError> {
+    pub fn step(&self) -> Result<(String, bool)> {
         self.step_with_callbacks(None, None)
     }
 
     /// 执行单次 CoT 循环（带回调）
-    pub fn step_with_callback(
-        &self,
-        callback: Option<&dyn Fn(&str)>,
-    ) -> Result<(String, bool), AgentError> {
+    pub fn step_with_callback(&self, callback: Option<&dyn Fn(&str)>) -> Result<(String, bool)> {
         self.step_with_callbacks(callback, None)
     }
 
@@ -643,7 +618,7 @@ Begin!"#,
         &self,
         callback: Option<&dyn Fn(&str)>,
         tool_callback: Option<&dyn Fn(&str, &str, bool)>,
-    ) -> Result<(String, bool), AgentError> {
+    ) -> Result<(String, bool)> {
         #[cfg(debug_assertions)]
         println!("\n🔄 [CoT Step] 开始执行单次循环");
 
@@ -724,7 +699,7 @@ Begin!"#,
     }
 
     /// 执行工具调用
-    fn execute_tool(&self, tool_call: &ToolCall) -> Result<ToolResult, AgentError> {
+    fn execute_tool(&self, tool_call: &ToolCall) -> Result<ToolResult> {
         #[cfg(debug_assertions)]
         println!(
             "\n⚡ [执行工具] {} 参数: {}",
@@ -768,7 +743,7 @@ Begin!"#,
     }
 
     /// 运行完整的 CoT 循环
-    pub fn run(&self, user_input: &str, max_iterations: usize) -> Result<String, AgentError> {
+    pub fn run(&self, user_input: &str, max_iterations: usize) -> Result<String> {
         self.run_with_callbacks(user_input, max_iterations, None, None)
     }
 
@@ -778,7 +753,7 @@ Begin!"#,
         user_input: &str,
         max_iterations: usize,
         callback: Option<&dyn Fn(&str)>,
-    ) -> Result<String, AgentError> {
+    ) -> Result<String> {
         self.run_with_callbacks(user_input, max_iterations, callback, None)
     }
 
@@ -789,7 +764,7 @@ Begin!"#,
         max_iterations: usize,
         callback: Option<&dyn Fn(&str)>,
         tool_callback: Option<&dyn Fn(&str, &str, bool)>,
-    ) -> Result<String, AgentError> {
+    ) -> Result<String> {
         #[cfg(debug_assertions)]
         println!("\n\n🚀 ================== CoT Agent 开始 ==================");
         #[cfg(debug_assertions)]
@@ -859,17 +834,17 @@ Begin!"#,
     }
 
     /// 获取当前使用的 token 数量
-    pub fn get_current_tokens(&self) -> Result<usize, AgentError> {
+    pub fn get_current_tokens(&self) -> Result<usize> {
         let prompt = self.build_prompt()?;
         let tokens = self
             .model
             .str_to_token(&prompt, AddBos::Never)
-            .map_err(|e| AgentError::InferenceError(format!("分词失败: {}", e)))?;
+            .context("分词失败")?;
         Ok(tokens.len())
     }
 
     /// 获取当前 prompt 的字符数
-    pub fn get_current_chars(&self) -> Result<usize, AgentError> {
+    pub fn get_current_chars(&self) -> Result<usize> {
         let prompt = self.build_prompt()?;
         Ok(prompt.chars().count())
     }
@@ -879,7 +854,7 @@ Begin!"#,
 pub struct EchoToolExecutor;
 
 impl McpToolExecutor for EchoToolExecutor {
-    fn execute(&self, tool_call: &ToolCall) -> Result<ToolResult, AgentError> {
+    fn execute(&self, tool_call: &ToolCall) -> Result<ToolResult> {
         Ok(ToolResult {
             tool_name: tool_call.name.clone(),
             result: format!(

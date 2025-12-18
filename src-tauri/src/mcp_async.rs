@@ -1,4 +1,5 @@
-use crate::agent::{AgentError, McpTool, ToolCall, ToolResult};
+use crate::agent::{McpTool, ToolCall, ToolResult};
+use anyhow::{Context, Result};
 use parking_lot::RwLock;
 use rmcp::{
     model::{CallToolRequestParam, Tool},
@@ -47,7 +48,7 @@ impl McpClient {
     }
 
     /// 连接到 MCP 服务器
-    pub async fn connect(&self) -> Result<(), AgentError> {
+    pub async fn connect(&self) -> Result<()> {
         let mut cmd = Command::new(&self.config.command);
 
         for (key, value) in &self.config.env {
@@ -60,12 +61,9 @@ impl McpClient {
                 c.arg(arg);
             }
         }))
-        .map_err(|e| AgentError::McpError(format!("创建传输层失败: {}", e)))?;
+        .context("创建传输层失败")?;
 
-        let service = ()
-            .serve(transport)
-            .await
-            .map_err(|e| AgentError::McpError(format!("连接 MCP 服务器失败: {}", e)))?;
+        let service = ().serve(transport).await.context("连接 MCP 服务器失败")?;
 
         let mut state = self.state.lock().await;
         state.service = Some(service);
@@ -78,17 +76,14 @@ impl McpClient {
     }
 
     /// 刷新工具列表
-    pub async fn refresh_tools(&self) -> Result<(), AgentError> {
+    pub async fn refresh_tools(&self) -> Result<()> {
         let state = self.state.lock().await;
-        let service = state
-            .service
-            .as_ref()
-            .ok_or_else(|| AgentError::McpError("MCP 服务器未连接".to_string()))?;
+        let service = state.service.as_ref().context("MCP 服务器未连接")?;
 
         let tools_result = service
             .list_tools(Default::default())
             .await
-            .map_err(|e| AgentError::McpError(format!("获取工具列表失败: {}", e)))?;
+            .context("获取工具列表失败")?;
 
         drop(state);
 
@@ -119,16 +114,9 @@ impl McpClient {
     }
 
     /// 调用工具
-    pub async fn call_tool(
-        &self,
-        name: &str,
-        arguments: serde_json::Value,
-    ) -> Result<ToolResult, AgentError> {
+    pub async fn call_tool(&self, name: &str, arguments: serde_json::Value) -> Result<ToolResult> {
         let state = self.state.lock().await;
-        let service = state
-            .service
-            .as_ref()
-            .ok_or_else(|| AgentError::McpError("MCP 服务器未连接".to_string()))?;
+        let service = state.service.as_ref().context("MCP 服务器未连接")?;
 
         let tool_name = name.to_string();
         let result = service
@@ -137,7 +125,7 @@ impl McpClient {
                 arguments: arguments.as_object().cloned(),
             })
             .await
-            .map_err(|e| AgentError::McpError(format!("调用工具失败: {}", e)))?;
+            .context("调用工具失败")?;
 
         let result_text = result
             .content
@@ -154,13 +142,10 @@ impl McpClient {
     }
 
     /// 断开连接
-    pub async fn disconnect(&self) -> Result<(), AgentError> {
+    pub async fn disconnect(&self) -> Result<()> {
         let mut state = self.state.lock().await;
         if let Some(service) = state.service.take() {
-            service
-                .cancel()
-                .await
-                .map_err(|e| AgentError::McpError(format!("断开连接失败: {}", e)))?;
+            service.cancel().await.context("断开连接失败")?;
         }
         Ok(())
     }
@@ -199,7 +184,7 @@ impl McpToolExecutorAsync {
     }
 
     /// 异步执行工具
-    pub async fn execute_async(&self, tool_call: &ToolCall) -> Result<ToolResult, AgentError> {
+    pub async fn execute_async(&self, tool_call: &ToolCall) -> Result<ToolResult> {
         self.client
             .call_tool(&tool_call.name, tool_call.arguments.clone())
             .await
@@ -224,11 +209,7 @@ impl McpManager {
     }
 
     /// 添加并连接 MCP 服务器
-    pub async fn add_server(
-        &self,
-        name: &str,
-        config: McpClientConfig,
-    ) -> Result<Arc<McpClient>, AgentError> {
+    pub async fn add_server(&self, name: &str, config: McpClientConfig) -> Result<Arc<McpClient>> {
         let client = Arc::new(McpClient::new(config));
         client.connect().await?;
 
@@ -245,7 +226,7 @@ impl McpManager {
     }
 
     /// 移除 MCP 服务器
-    pub async fn remove_server(&self, name: &str) -> Result<(), AgentError> {
+    pub async fn remove_server(&self, name: &str) -> Result<()> {
         let mut clients = self.clients.lock().await;
         if let Some(client) = clients.remove(name) {
             client.disconnect().await?;
@@ -272,7 +253,7 @@ impl McpManager {
     }
 
     /// 关闭所有连接
-    pub async fn shutdown(&self) -> Result<(), AgentError> {
+    pub async fn shutdown(&self) -> Result<()> {
         let mut clients = self.clients.lock().await;
         for (_, client) in clients.drain() {
             client.disconnect().await?;
