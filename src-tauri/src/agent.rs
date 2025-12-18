@@ -35,9 +35,9 @@ Question: {{QUERY}}";
 /// 根据工具信息生成工具描述
 /// 参考：https://github.com/QwenLM/Qwen/blob/main/examples/react_prompt.md
 fn format_tool_desc(tool: &McpTool) -> String {
-    let params_str = serde_json::to_string_pretty(&tool.input_schema).unwrap_or_default();
+    let params_str = serde_json::to_string(&tool.input_schema).unwrap_or_default();
     format!(
-        "{name}: 调用此工具与 {name} API 进行交互。{name} API 有什么用？{desc}\n参数：\n```json\n{params}\n```\n请将参数格式化为 JSON 对象。",
+        "{name}: 调用此工具与 {name} API 进行交互。{name} API 有什么用？{desc} 参数：{params}",
         name = tool.name,
         desc = tool.description,
         params = params_str
@@ -318,7 +318,7 @@ impl Agent {
 
             #[cfg(debug_assertions)]
             if iteration > 0 {
-                println!("[Agent] 增量消息: {:?}", messages.last());
+                println!("[Agent] 增量消息: {:?}", messages.last().unwrap().1);
             }
 
             // 生成回复
