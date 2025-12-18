@@ -12,6 +12,9 @@ use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// ReAct 系统提示词模板
+const REACT_PROMPT: &str = include_str!("../resources/prompt/agent.md");
+
 /// MCP 工具定义
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpTool {
@@ -257,7 +260,7 @@ impl CoTAgent {
         );
     }
 
-    /// 构建 CoT 任务规划与思维链系统提示词
+    /// 构建 ReAct 系统提示词
     fn build_cot_system_prompt(&self) -> String {
         let tools = self.tools.read();
         let context = self.context.read();
@@ -267,59 +270,32 @@ impl CoTAgent {
             .iter()
             .map(|t| {
                 format!(
-                    "- {}: {}\n  Parameters: {}",
+                    "- `{}[参数]`：{}\n  参数格式：{}",
                     t.name,
                     t.description,
                     serde_json::to_string(&t.input_schema).unwrap_or_default()
                 )
             })
             .collect();
-        let tool_descs_str = tool_descs.join("\n\n");
-
-        // 构建工具名称列表
-        let tool_names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
-        let tool_names_str = tool_names.join(", ");
+        let tools_section = if tool_descs.is_empty() {
+            String::new()
+        } else {
+            format!("\n\n可用的行动类型包括：\n{}", tool_descs.join("\n\n"))
+        };
 
         // 构建上下文信息（如 MCP 环境变量配置）
         let context_section = if context.is_empty() {
             String::new()
         } else {
             format!(
-                "\n\nAvailable Configuration:\n{}\nIMPORTANT: \"(configured)\" means the actual value is hidden. You MUST ask the user to provide the actual password before connecting to database. Do NOT use \"(configured)\" as the password value.\n",
+                "## 环境配置\n\n{}\n\n**重要提示**：\"(configured)\" 表示实际值已隐藏。在连接数据库前，你必须询问用户提供实际的密码。不要使用 \"(configured)\" 作为密码值。",
                 *context
             )
         };
 
-        format!(
-            r#"You are an intelligent assistant that solves tasks step by step using Chain-of-Thought reasoning.
-
-Available Tools:
-{tool_descs}{context_section}
-
-When you receive a task, follow this format:
-
-Planning: Analyze the task and create a step-by-step plan
-Step 1: [Description of what this step does]
-Tool: [tool name, should be one of: {tool_names}]
-Tool Input: [JSON parameters for the tool]
-Result: [Wait for actual tool result]
-Step 2: ...
-... (continue steps as needed)
-Summary: [Final answer based on all results]
-
-Important Rules:
-- Always respond in the same language as the user's question
-- Tool Input must be a valid JSON object
-- Wait for Result before proceeding to the next step
-- If no tools are needed, provide direct answer in Summary
-- NEVER fabricate or guess data. Only use actual results from tool executions
-- If a tool returns an error, report the error to user instead of making up data
-- Each step should have a clear purpose towards solving the task
-
-Begin!"#,
-            tool_descs = tool_descs_str,
-            tool_names = tool_names_str
-        )
+        REACT_PROMPT
+            .replace("{{TOOLS}}", &tools_section)
+            .replace("{{CONTEXT}}", &context_section)
     }
 
     /// 添加用户消息
