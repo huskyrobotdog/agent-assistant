@@ -1,7 +1,6 @@
-use crate::tool::{McpTool, ToolCall, ToolResult};
+use crate::tool::{McpTool, ToolResult};
 use anyhow::{Context, Result};
 use once_cell::sync::Lazy;
-use parking_lot::RwLock;
 use rmcp::{
     model::{CallToolRequestParam, Tool},
     service::{RunningService, ServiceExt},
@@ -204,6 +203,7 @@ impl McpClient {
     }
 
     /// 断开连接
+    #[allow(dead_code)]
     pub async fn disconnect(&self) -> Result<()> {
         let mut state = self.state.lock().await;
         if let Some(service) = state.service.take() {
@@ -219,56 +219,22 @@ impl McpClient {
     }
 
     /// 检查是否已连接
+    #[allow(dead_code)]
     pub async fn is_connected(&self) -> bool {
         let state = self.state.lock().await;
         state.service.is_some()
     }
 }
 
-/// MCP 工具执行器包装（异步版本）
-pub struct McpToolExecutorAsync {
-    client: Arc<McpClient>,
-    tools_cache: RwLock<Vec<McpTool>>,
-}
-
-impl McpToolExecutorAsync {
-    pub fn new(client: Arc<McpClient>) -> Self {
-        Self {
-            client,
-            tools_cache: RwLock::new(Vec::new()),
-        }
-    }
-
-    /// 同步缓存工具列表（在连接后调用一次）
-    pub async fn cache_tools(&self) {
-        let tools = self.client.get_tools().await;
-        *self.tools_cache.write() = tools;
-    }
-
-    /// 异步执行工具
-    pub async fn execute_async(&self, tool_call: &ToolCall) -> Result<ToolResult> {
-        self.client
-            .call_tool(&tool_call.name, tool_call.arguments.clone())
-            .await
-    }
-
-    /// 获取缓存的工具列表（同步）
-    pub fn get_tools_cached(&self) -> Vec<McpTool> {
-        self.tools_cache.read().clone()
-    }
-}
-
 /// MCP 服务器管理器 - 管理多个 MCP 服务器连接
 pub struct McpManager {
     clients: TokioMutex<HashMap<String, Arc<McpClient>>>,
-    executors: TokioMutex<HashMap<String, Arc<McpToolExecutorAsync>>>,
 }
 
 impl McpManager {
     pub fn new() -> Self {
         Self {
             clients: TokioMutex::new(HashMap::new()),
-            executors: TokioMutex::new(HashMap::new()),
         }
     }
 
@@ -277,50 +243,10 @@ impl McpManager {
         let client = Arc::new(McpClient::new(config));
         client.connect().await?;
 
-        let executor = Arc::new(McpToolExecutorAsync::new(client.clone()));
-        executor.cache_tools().await;
-
         let mut clients = self.clients.lock().await;
         clients.insert(name.to_string(), client.clone());
-        drop(clients);
-
-        let mut executors = self.executors.lock().await;
-        executors.insert(name.to_string(), executor);
 
         Ok(client)
-    }
-
-    /// 获取执行器
-    pub async fn get_executor(&self, name: &str) -> Option<Arc<McpToolExecutorAsync>> {
-        let executors = self.executors.lock().await;
-        executors.get(name).cloned()
-    }
-
-    /// 获取所有执行器
-    pub async fn get_all_executors(&self) -> HashMap<String, Arc<McpToolExecutorAsync>> {
-        let executors = self.executors.lock().await;
-        executors.clone()
-    }
-
-    /// 获取 MCP 客户端
-    pub async fn get_client(&self, name: &str) -> Option<Arc<McpClient>> {
-        let clients = self.clients.lock().await;
-        clients.get(name).cloned()
-    }
-
-    /// 移除 MCP 服务器
-    pub async fn remove_server(&self, name: &str) -> Result<()> {
-        // 移除 executor
-        let mut executors = self.executors.lock().await;
-        executors.remove(name);
-        drop(executors);
-
-        // 移除 client 并断开连接
-        let mut clients = self.clients.lock().await;
-        if let Some(client) = clients.remove(name) {
-            client.disconnect().await?;
-        }
-        Ok(())
     }
 
     /// 获取所有工具
@@ -352,21 +278,6 @@ impl McpManager {
         }
 
         Err(anyhow::anyhow!("未找到工具: {}", tool_name))
-    }
-
-    /// 获取所有客户端名称
-    pub async fn get_server_names(&self) -> Vec<String> {
-        let clients = self.clients.lock().await;
-        clients.keys().cloned().collect()
-    }
-
-    /// 关闭所有连接
-    pub async fn shutdown(&self) -> Result<()> {
-        let mut clients = self.clients.lock().await;
-        for (_, client) in clients.drain() {
-            client.disconnect().await?;
-        }
-        Ok(())
     }
 }
 

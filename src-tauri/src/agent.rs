@@ -1,4 +1,4 @@
-use crate::tool::{ToolCall, ToolResult};
+use crate::tool::{McpTool, ToolCall, ToolResult};
 use anyhow::{Context, Result};
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::context::LlamaContext;
@@ -20,29 +20,19 @@ pub const REACT_PROMPT_TEMPLATE: &str = include_str!("../resources/prompt/agent.
 pub const TOOL_DESC_TEMPLATE: &str = "{name}: Call this tool to interact with the {name} API. What is the {name} API useful for? {description} Parameters: {parameters} Format the arguments as a JSON object.";
 
 /// 根据工具信息生成工具描述
-fn format_tool_desc(name: &str, description: &str, parameters: &str) -> String {
+fn format_tool_desc(tool: &McpTool) -> String {
     TOOL_DESC_TEMPLATE
-        .replace("{name}", name)
-        .replace("{description}", description)
-        .replace("{parameters}", parameters)
-}
-
-/// 工具信息结构（用于构建 prompt）
-pub struct ToolInfo {
-    pub name: String,
-    pub description: String,
-    pub parameters: String,
+        .replace("{name}", &tool.name)
+        .replace("{description}", &tool.description)
+        .replace("{parameters}", &tool.input_schema.to_string())
 }
 
 /// 构建完整的 ReAct Prompt
-pub fn build_react_prompt(query: &str, tools: &[ToolInfo]) -> String {
+pub fn build_react_prompt(query: &str, tools: &[McpTool]) -> String {
     let (tools_prompt, tool_names) = if tools.is_empty() {
         (String::new(), String::new())
     } else {
-        let descs: Vec<String> = tools
-            .iter()
-            .map(|t| format_tool_desc(&t.name, &t.description, &t.parameters))
-            .collect();
+        let descs: Vec<String> = tools.iter().map(format_tool_desc).collect();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         (descs.join("\n\n"), names.join(","))
     };
@@ -98,7 +88,7 @@ fn execute_tool(tool_call: &ToolCall) -> Result<ToolResult> {
 /// - query: 用户问题
 /// - tools: 可用工具列表（为空则不使用工具）
 /// - callback: 流式输出回调
-pub fn chat(query: &str, tools: &[ToolInfo], callback: Option<&dyn Fn(&str)>) -> Result<String> {
+pub fn chat(query: &str, tools: &[McpTool], callback: Option<&dyn Fn(&str)>) -> Result<String> {
     // 构建 ReAct Prompt
     let prompt = build_react_prompt(query, tools);
 

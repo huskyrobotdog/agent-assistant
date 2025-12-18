@@ -76,15 +76,7 @@ async fn chat(
     _system_prompt: Option<String>,
 ) -> Result<String, String> {
     // 获取工具列表
-    let mcp_tools = mcp::MCP_MANAGER.get_all_tools().await;
-    let tools: Vec<agent::ToolInfo> = mcp_tools
-        .into_iter()
-        .map(|t| agent::ToolInfo {
-            name: t.name,
-            description: t.description,
-            parameters: t.input_schema.to_string(),
-        })
-        .collect();
+    let tools = mcp::MCP_MANAGER.get_all_tools().await;
 
     let app_clone = app.clone();
 
