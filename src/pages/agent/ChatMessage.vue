@@ -22,7 +22,7 @@ const props = defineProps({
   },
 })
 
-const showThinking = ref(false)
+const showThinking = ref(true)
 
 const isUser = computed(() => props.message.role === 'user')
 
@@ -311,7 +311,7 @@ function getStepLabel(step) {
     class="flex"
     :class="isUser ? 'justify-end' : 'justify-start'">
     <div
-      class="message-bubble max-w-[80%] rounded-lg"
+      class="message-bubble w-full rounded-lg"
       :class="isUser ? 'user-message' : 'assistant-message'">
       <!-- 用户消息 -->
       <template v-if="isUser">

@@ -370,18 +370,18 @@ impl Agent {
                     }
                 }
 
-                // 总结消息历史（不包含初始 prompt）
-                if messages.len() > 2 {
-                    let history = &messages[1..];
-                    if let Ok(summary) = self.summarize_history(history) {
-                        // 保留初始 prompt，用总结替代其余消息
-                        let initial_prompt = messages[0].clone();
-                        messages.clear();
-                        messages.push(initial_prompt);
-                        messages
-                            .push(("user".to_string(), format!("之前步骤的总结：\n{}", summary)));
-                    }
-                }
+                // // 总结消息历史（不包含初始 prompt）
+                // if messages.len() > 2 {
+                //     let history = &messages[1..];
+                //     if let Ok(summary) = self.summarize_history(history) {
+                //         // 保留初始 prompt，用总结替代其余消息
+                //         let initial_prompt = messages[0].clone();
+                //         messages.clear();
+                //         messages.push(initial_prompt);
+                //         messages
+                //             .push(("user".to_string(), format!("之前步骤的总结：\n{}", summary)));
+                //     }
+                // }
             } else {
                 // 没有工具调用，返回最终响应
                 final_response = response;
