@@ -53,6 +53,13 @@ const loadConfig = async () => {
   }
 }
 
+// 移除 JSON 注释（支持 JSONC 格式）
+const stripJsonComments = (jsonString) => {
+  return jsonString
+    .replace(/\/\/.*$/gm, '') // 移除单行注释
+    .replace(/\/\*[\s\S]*?\*\//g, '') // 移除多行注释
+}
+
 // 保存配置
 const saveConfig = async () => {
   if (hasErrors.value) {
@@ -64,7 +71,7 @@ const saveConfig = async () => {
   error.value = ''
   success.value = ''
   try {
-    const config = JSON.parse(getEditorValue())
+    const config = JSON.parse(stripJsonComments(getEditorValue()))
     await invoke('save_mcp_config', { config })
     success.value = '配置保存成功'
     setTimeout(() => (success.value = ''), 3000)
@@ -99,9 +106,16 @@ const updateEditorHeight = () => {
 const initEditor = () => {
   if (!editorContainer.value) return
 
+  // 配置 JSON 语言服持注释
+  monaco.languages.json.jsonDefaults.setDiagnosticsOptions({
+    validate: true,
+    allowComments: true,
+    trailingCommas: 'ignore',
+  })
+
   editor = monaco.editor.create(editorContainer.value, {
     value: '{\n  "mcpServers": {}\n}',
-    language: 'json',
+    language: 'json', // 使用 json + allowComments 配置
     theme: isDarkMode() ? 'vs-dark' : 'vs',
     automaticLayout: true,
     minimap: { enabled: false },
