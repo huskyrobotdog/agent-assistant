@@ -135,13 +135,13 @@ onMounted(async () => {
     }
   })
 
-  // 监听工具执行结果（使用 Qwen ReAct Observation 格式）
+  // 监听工具执行结果（使用 CoT Result 格式）
   unlistenToolResult = await listen('tool-result', (event) => {
     if (streamingMessageId.value) {
       const msg = messages.value.find((m) => m.id === streamingMessageId.value)
       if (msg) {
         const { result } = event.payload
-        msg.content += `\nObservation: ${result}\n`
+        msg.content += `\nResult: ${result}\n`
         nextTick(() => scrollToBottom())
       }
     }

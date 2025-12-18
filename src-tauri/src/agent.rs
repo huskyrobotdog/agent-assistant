@@ -105,13 +105,14 @@ impl Default for AgentConfig {
     }
 }
 
-/// ReAct Agent 状态
+/// CoT Agent 状态
 #[derive(Debug, Clone, PartialEq)]
 pub enum AgentState {
     Idle,
-    Thinking,
-    Acting,
+    Planning,
+    Executing,
     Observing,
+    Summarizing,
     Finished,
     Error,
 }
@@ -131,8 +132,8 @@ pub trait McpToolExecutor: Send + Sync {
     fn get_tools(&self) -> Vec<McpTool>;
 }
 
-/// ReAct Agent 实现
-pub struct ReactAgent {
+/// CoT Agent 实现（任务规划与思维链）
+pub struct CoTAgent {
     backend: LlamaBackend,
     model: LlamaModel,
     config: AgentConfig,
@@ -144,7 +145,7 @@ pub struct ReactAgent {
     context: RwLock<String>,
 }
 
-impl ReactAgent {
+impl CoTAgent {
     /// 创建新的 Agent
     pub fn new(config: AgentConfig) -> Result<Self, AgentError> {
         // 禁用 llama 日志
@@ -208,7 +209,7 @@ impl ReactAgent {
         if self.messages.read().is_empty()
             || !self.messages.read().iter().any(|m| m.role == Role::System)
         {
-            self.set_system_prompt(&self.build_react_system_prompt());
+            self.set_system_prompt(&self.build_cot_system_prompt());
         }
         self.add_user_message(user_input);
     }
@@ -272,8 +273,8 @@ impl ReactAgent {
         );
     }
 
-    /// 构建 Qwen ReAct 风格系统提示词
-    fn build_react_system_prompt(&self) -> String {
+    /// 构建 CoT 任务规划与思维链系统提示词
+    fn build_cot_system_prompt(&self) -> String {
         let tools = self.tools.read();
         let context = self.context.read();
 
@@ -282,7 +283,7 @@ impl ReactAgent {
             .iter()
             .map(|t| {
                 format!(
-                    "{}: {}. Parameters: {} Format the arguments as a JSON object.",
+                    "- {}: {}\n  Parameters: {}",
                     t.name,
                     t.description,
                     serde_json::to_string(&t.input_schema).unwrap_or_default()
@@ -306,28 +307,30 @@ impl ReactAgent {
         };
 
         format!(
-            r#"Answer the following questions as best you can. You have access to the following tools:
+            r#"You are an intelligent assistant that solves tasks step by step using Chain-of-Thought reasoning.
 
+Available Tools:
 {tool_descs}{context_section}
 
-Use the following format:
+When you receive a task, follow this format:
 
-Question: the input question you must answer
-Thought: you should always think about what to do
-Action: the action to take, should be one of [{tool_names}]
-Action Input: the input to the action, must be valid JSON
-Observation: the result of the action
-... (this Thought/Action/Action Input/Observation can be repeated zero or more times)
-Thought: I now know the final answer
-Final Answer: the final answer to the original input question
+Planning: Analyze the task and create a step-by-step plan
+Step 1: [Description of what this step does]
+Tool: [tool name, should be one of: {tool_names}]
+Tool Input: [JSON parameters for the tool]
+Result: [Wait for actual tool result]
+Step 2: ...
+... (continue steps as needed)
+Summary: [Final answer based on all results]
 
-Important:
+Important Rules:
 - Always respond in the same language as the user's question
-- Action Input must be a valid JSON object
-- Wait for Observation before continuing
-- If no tools are needed, go directly to Final Answer
-- NEVER fabricate or guess data. Only use actual results from tool observations
+- Tool Input must be a valid JSON object
+- Wait for Result before proceeding to the next step
+- If no tools are needed, provide direct answer in Summary
+- NEVER fabricate or guess data. Only use actual results from tool executions
 - If a tool returns an error, report the error to user instead of making up data
+- Each step should have a clear purpose towards solving the task
 
 Begin!"#,
             tool_descs = tool_descs_str,
@@ -389,7 +392,7 @@ Begin!"#,
         &self,
         callback: Option<&dyn Fn(&str)>,
     ) -> Result<String, AgentError> {
-        *self.state.write() = AgentState::Thinking;
+        *self.state.write() = AgentState::Planning;
 
         #[cfg(debug_assertions)]
         println!("\n🧠 [开始推理]");
@@ -457,8 +460,8 @@ Begin!"#,
         let mut n_cur = batch.n_tokens();
         let mut decoder = encoding_rs::UTF_8.new_decoder();
 
-        // ReAct 模式的 stop word：当模型生成 "Observation" 时停止，等待真正的工具结果
-        const STOP_WORD: &str = "Observation:";
+        // CoT 模式的 stop word：当模型生成 "Result:" 时停止，等待真正的工具结果
+        const STOP_WORD: &str = "Result:";
 
         while n_cur < self.config.max_tokens {
             let token = sampler.sample(&ctx, batch.n_tokens() - 1);
@@ -478,14 +481,14 @@ Begin!"#,
 
             output.push_str(&token_str);
 
-            // 检查 stop word：当检测到 "Observation:" 时停止生成
+            // 检查 stop word：当检测到 "Result:" 时停止生成
             if output.contains(STOP_WORD) {
                 // 移除 stop word，让真正的工具结果来填充
                 if let Some(pos) = output.find(STOP_WORD) {
                     output.truncate(pos);
                 }
                 #[cfg(debug_assertions)]
-                println!("\n\n🛑 [Stop Word] 检测到 Observation，停止生成");
+                println!("\n\n🛑 [Stop Word] 检测到 Result，停止生成");
                 break;
             }
 
@@ -533,11 +536,11 @@ Begin!"#,
     fn parse_tool_calls(&self, response: &str) -> Vec<ToolCall> {
         let mut tool_calls = Vec::new();
 
-        // 格式 1: Qwen ReAct 风格 Action/Action Input (优先)
+        // 格式 1: CoT 风格 Tool/Tool Input (优先)
         // 使用 [ \t]* 只匹配空格/制表符，不匹配换行，避免 \s* 吃掉换行导致匹配失败
-        let react_re =
-            regex::Regex::new(r"(?s)Action:[ \t]*(\S+)[ \t]*\nAction Input:[ \t]*(\{.*?\})").ok();
-        if let Some(re) = react_re {
+        let cot_re =
+            regex::Regex::new(r"(?s)Tool:[ \t]*(\S+)[ \t]*\nTool Input:[ \t]*(\{.*?\})").ok();
+        if let Some(re) = cot_re {
             for cap in re.captures_iter(response) {
                 if let (Some(name), Some(args)) = (cap.get(1), cap.get(2)) {
                     if let Ok(arguments) = serde_json::from_str(args.as_str().trim()) {
@@ -550,7 +553,26 @@ Begin!"#,
             }
         }
 
-        // 格式 2: <tool_call>...</tool_call> (Hermes-style，备用)
+        // 格式 2: ReAct 风格 Action/Action Input (兼容旧格式)
+        if tool_calls.is_empty() {
+            let react_re =
+                regex::Regex::new(r"(?s)Action:[ \t]*(\S+)[ \t]*\nAction Input:[ \t]*(\{.*?\})")
+                    .ok();
+            if let Some(re) = react_re {
+                for cap in re.captures_iter(response) {
+                    if let (Some(name), Some(args)) = (cap.get(1), cap.get(2)) {
+                        if let Ok(arguments) = serde_json::from_str(args.as_str().trim()) {
+                            tool_calls.push(ToolCall {
+                                name: name.as_str().trim().to_string(),
+                                arguments,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // 格式 3: <tool_call>...</tool_call> (Hermes-style，备用)
         if tool_calls.is_empty() {
             let re = regex::Regex::new(r"(?s)<tool_call>\s*(\{.*?\})\s*</tool_call>").ok();
             if let Some(re) = re {
@@ -603,12 +625,12 @@ Begin!"#,
             .map(|m| m.as_str().trim().to_string())
     }
 
-    /// 执行单次 ReAct 循环
+    /// 执行单次 CoT 循环
     pub fn step(&self) -> Result<(String, bool), AgentError> {
         self.step_with_callbacks(None, None)
     }
 
-    /// 执行单次 ReAct 循环（带回调）
+    /// 执行单次 CoT 循环（带回调）
     pub fn step_with_callback(
         &self,
         callback: Option<&dyn Fn(&str)>,
@@ -616,14 +638,14 @@ Begin!"#,
         self.step_with_callbacks(callback, None)
     }
 
-    /// 执行单次 ReAct 循环（带生成回调和工具结果回调）
+    /// 执行单次 CoT 循环（带生成回调和工具结果回调）
     pub fn step_with_callbacks(
         &self,
         callback: Option<&dyn Fn(&str)>,
         tool_callback: Option<&dyn Fn(&str, &str, bool)>,
     ) -> Result<(String, bool), AgentError> {
         #[cfg(debug_assertions)]
-        println!("\n🔄 [ReAct Step] 开始执行单次循环");
+        println!("\n🔄 [CoT Step] 开始执行单次循环");
 
         let response = self.generate_with_callback(callback)?;
 
@@ -635,7 +657,7 @@ Begin!"#,
         }
 
         if !tool_calls.is_empty() {
-            *self.state.write() = AgentState::Acting;
+            *self.state.write() = AgentState::Executing;
 
             {
                 let mut messages = self.messages.write();
@@ -655,11 +677,11 @@ Begin!"#,
                     cb(&result.tool_name, &result.result, result.is_error);
                 }
 
-                // 使用 Observation 格式（Qwen ReAct 风格）
+                // 使用 Result 格式（CoT 风格）
                 let mut messages = self.messages.write();
                 messages.push(Message {
                     role: Role::Tool,
-                    content: format!("Observation: {}", result.result),
+                    content: format!("Result: {}", result.result),
                     tool_calls: None,
                     tool_call_id: Some(tool_call.name.clone()),
                 });
@@ -745,12 +767,12 @@ Begin!"#,
         })
     }
 
-    /// 运行完整的 ReAct 循环
+    /// 运行完整的 CoT 循环
     pub fn run(&self, user_input: &str, max_iterations: usize) -> Result<String, AgentError> {
         self.run_with_callbacks(user_input, max_iterations, None, None)
     }
 
-    /// 运行完整的 ReAct 循环（带回调）
+    /// 运行完整的 CoT 循环（带回调）
     pub fn run_with_callback(
         &self,
         user_input: &str,
@@ -760,7 +782,7 @@ Begin!"#,
         self.run_with_callbacks(user_input, max_iterations, callback, None)
     }
 
-    /// 运行完整的 ReAct 循环（带生成回调和工具结果回调）
+    /// 运行完整的 CoT 循环（带生成回调和工具结果回调）
     pub fn run_with_callbacks(
         &self,
         user_input: &str,
@@ -769,14 +791,14 @@ Begin!"#,
         tool_callback: Option<&dyn Fn(&str, &str, bool)>,
     ) -> Result<String, AgentError> {
         #[cfg(debug_assertions)]
-        println!("\n\n🚀 ================== ReAct Agent 开始 ==================");
+        println!("\n\n🚀 ================== CoT Agent 开始 ==================");
         #[cfg(debug_assertions)]
         println!("📊 [最大迭代次数] {}", max_iterations);
 
         if self.messages.read().is_empty()
             || !self.messages.read().iter().any(|m| m.role == Role::System)
         {
-            self.set_system_prompt(&self.build_react_system_prompt());
+            self.set_system_prompt(&self.build_cot_system_prompt());
             #[cfg(debug_assertions)]
             println!("📋 [系统提示词已设置]");
         }
@@ -810,7 +832,7 @@ Begin!"#,
         }
 
         #[cfg(debug_assertions)]
-        println!("\n🏁 ================== ReAct Agent 结束 ==================\n");
+        println!("\n🏁 ================== CoT Agent 结束 ==================\n");
 
         Ok(final_response)
     }
@@ -885,7 +907,7 @@ mod tests {
 </tool_call>
 "#;
 
-        let _agent = ReactAgent::new(AgentConfig {
+        let _agent = CoTAgent::new(AgentConfig {
             model_path: PathBuf::from("test.gguf"),
             ..Default::default()
         });

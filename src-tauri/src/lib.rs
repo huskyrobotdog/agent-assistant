@@ -13,7 +13,7 @@ use tokio::sync::Mutex as TokioMutex;
 
 /// 全局 Agent 状态（Tauri 管理）
 struct TauriAgentState {
-    agent: RwLock<Option<Arc<ReactAgent>>>,
+    agent: RwLock<Option<Arc<CoTAgent>>>,
     mcp_manager: Arc<McpManager>,
     mcp_executors: TokioMutex<HashMap<String, Arc<McpToolExecutorAsync>>>,
 }
@@ -56,7 +56,7 @@ async fn init_agent(
     };
 
     // 在后台线程加载模型，避免阻塞主线程
-    let agent = tauri::async_runtime::spawn_blocking(move || ReactAgent::new(config))
+    let agent = tauri::async_runtime::spawn_blocking(move || CoTAgent::new(config))
         .await
         .map_err(|e| format!("任务执行失败: {}", e))?
         .map_err(|e| e.to_string())?;
@@ -78,7 +78,7 @@ async fn init_agent(
 async fn load_mcp_servers_async(
     app: &tauri::AppHandle,
     state: &tauri::State<'_, TauriAgentState>,
-    agent: &Arc<ReactAgent>,
+    agent: &Arc<CoTAgent>,
 ) -> Result<usize, String> {
     let config_path = get_mcp_config_path(app)?;
 

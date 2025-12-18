@@ -35,22 +35,22 @@ function cleanContent(text) {
   if (thinkIdx !== -1) {
     cleaned = cleaned.substring(0, thinkIdx)
   }
-  // 移除残留的 "Observation" 词（当 stop word 生效时可能残留）
-  cleaned = cleaned.replace(/\nObservation\s*$/g, '')
-  cleaned = cleaned.replace(/^Observation\s*$/gm, '')
+  // 移除残留的 "Result" 词（当 stop word 生效时可能残留）
+  cleaned = cleaned.replace(/\nResult\s*$/g, '')
+  cleaned = cleaned.replace(/^Result\s*$/gm, '')
   return cleaned.trim()
 }
 
-// 解析内容，提取思考/操作/观察等步骤（支持 Qwen ReAct 格式）
+// 解析内容，提取任务规划/步骤/工具调用/结果等（CoT 任务规划格式）
 const parsedContent = computed(() => {
   const content = props.message.content || ''
   const steps = []
 
-  // 按行解析 ReAct 格式
+  // 按行解析 CoT 格式
   const lines = content.split('\n')
   let currentType = null
   let currentContent = []
-  let finalAnswer = ''
+  let summary = ''
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
@@ -60,50 +60,57 @@ const parsedContent = computed(() => {
       continue
     }
 
-    if (line.startsWith('Thought:')) {
+    if (line.startsWith('Planning:')) {
       // 保存之前的内容
       if (currentType && currentContent.length > 0) {
         const cleaned = cleanContent(currentContent.join('\n'))
         if (cleaned) steps.push({ type: currentType, content: cleaned })
       }
-      currentType = 'thought'
-      currentContent = [line.substring(8).trim()]
-    } else if (line.startsWith('Action:')) {
+      currentType = 'planning'
+      currentContent = [line.substring(9).trim()]
+    } else if (line.match(/^Step\s*\d+:/)) {
       if (currentType && currentContent.length > 0) {
         const cleaned = cleanContent(currentContent.join('\n'))
         if (cleaned) steps.push({ type: currentType, content: cleaned })
       }
-      currentType = 'action'
+      currentType = 'step'
+      currentContent = [line.replace(/^Step\s*\d+:\s*/, '').trim()]
+    } else if (line.startsWith('Tool:')) {
+      if (currentType && currentContent.length > 0) {
+        const cleaned = cleanContent(currentContent.join('\n'))
+        if (cleaned) steps.push({ type: currentType, content: cleaned })
+      }
+      currentType = 'tool'
+      currentContent = [line.substring(5).trim()]
+    } else if (line.startsWith('Tool Input:')) {
+      // Tool Input 追加到 tool
+      if (currentType === 'tool') {
+        currentContent.push(line.substring(11).trim())
+      }
+    } else if (line.startsWith('Result:')) {
+      if (currentType && currentContent.length > 0) {
+        const cleaned = cleanContent(currentContent.join('\n'))
+        if (cleaned) steps.push({ type: currentType, content: cleaned })
+      }
+      currentType = 'result'
       currentContent = [line.substring(7).trim()]
-    } else if (line.startsWith('Action Input:')) {
-      // Action Input 追加到 action
-      if (currentType === 'action') {
-        currentContent.push(line.substring(13).trim())
-      }
-    } else if (line.startsWith('Observation:')) {
-      if (currentType && currentContent.length > 0) {
-        const cleaned = cleanContent(currentContent.join('\n'))
-        if (cleaned) steps.push({ type: currentType, content: cleaned })
-      }
-      currentType = 'observation'
-      currentContent = [line.substring(12).trim()]
-    } else if (line.startsWith('Final Answer:')) {
+    } else if (line.startsWith('Summary:')) {
       if (currentType && currentContent.length > 0) {
         const cleaned = cleanContent(currentContent.join('\n'))
         if (cleaned) steps.push({ type: currentType, content: cleaned })
       }
       currentType = null
       currentContent = []
-      finalAnswer = line.substring(13).trim()
-      // 后续所有内容都是 Final Answer
+      summary = line.substring(8).trim()
+      // 后续所有内容都是 Summary
       for (let j = i + 1; j < lines.length; j++) {
-        finalAnswer += '\n' + lines[j]
+        summary += '\n' + lines[j]
       }
-      finalAnswer = cleanContent(finalAnswer)
+      summary = cleanContent(summary)
       break
     } else if (currentType) {
-      // 继续当前类型的内容（跳过只包含 "Observation" 的行）
-      if (line.trim() !== 'Observation' && !line.startsWith('<think>')) {
+      // 继续当前类型的内容（跳过只包含 "Result" 的行）
+      if (line.trim() !== 'Result' && !line.startsWith('<think>')) {
         currentContent.push(line)
       }
     }
@@ -116,13 +123,13 @@ const parsedContent = computed(() => {
   }
 
   // 检测流式状态
-  const isStreaming = content.includes('Thought:') && !content.includes('Final Answer:')
+  const isStreaming = (content.includes('Planning:') || content.includes('Step')) && !content.includes('Summary:')
 
   return {
     steps,
-    response: finalAnswer,
+    response: summary,
     isStreaming,
-    hasFinalAnswer: !!finalAnswer,
+    hasSummary: !!summary,
   }
 })
 
@@ -140,20 +147,20 @@ const hasSteps = computed(() => {
   return parsedContent.value.steps.length > 0 || streamingStep.value
 })
 
-// 解析 ReAct 思维链步骤
-const reactSteps = computed(() => {
-  if (!props.message.reactChain) return []
-  return props.message.reactChain
+// 解析 CoT 思维链步骤
+const cotSteps = computed(() => {
+  if (!props.message.cotChain) return []
+  return props.message.cotChain
 })
 
-// 判断是否有 ReAct 思维链
-const hasReactChain = computed(() => {
-  return props.message.reactChain && props.message.reactChain.length > 0
+// 判断是否有 CoT 思维链
+const hasCotChain = computed(() => {
+  return props.message.cotChain && props.message.cotChain.length > 0
 })
 
 // 判断是否有思考过程（兼容旧逻辑）
 const hasThinking = computed(() => {
-  return hasSteps.value && !hasReactChain.value
+  return hasSteps.value && !hasCotChain.value
 })
 
 // 获取所有步骤（包括流式的）
@@ -172,12 +179,14 @@ function toggleThinking() {
 // 获取步骤类型的图标和颜色
 function getStepStyle(type) {
   switch (type) {
-    case 'thought':
-      return { icon: 'pi-lightbulb', color: 'thought' }
-    case 'action':
-      return { icon: 'pi-bolt', color: 'action' }
-    case 'observation':
-      return { icon: 'pi-eye', color: 'observation' }
+    case 'planning':
+      return { icon: 'pi-list-check', color: 'planning' }
+    case 'step':
+      return { icon: 'pi-play', color: 'step' }
+    case 'tool':
+      return { icon: 'pi-bolt', color: 'tool' }
+    case 'result':
+      return { icon: 'pi-check-circle', color: 'result' }
     default:
       return { icon: 'pi-circle', color: '' }
   }
@@ -185,12 +194,14 @@ function getStepStyle(type) {
 
 function getStepLabel(type) {
   switch (type) {
-    case 'thought':
-      return '思考'
-    case 'action':
-      return '行动'
-    case 'observation':
-      return '观察'
+    case 'planning':
+      return '任务规划'
+    case 'step':
+      return '执行步骤'
+    case 'tool':
+      return '工具调用'
+    case 'result':
+      return '执行结果'
     default:
       return type
   }
@@ -211,10 +222,10 @@ function getStepLabel(type) {
 
       <!-- AI 消息 -->
       <template v-else>
-        <!-- ReAct 思维链 -->
+        <!-- CoT 思维链 -->
         <div
-          v-if="hasReactChain"
-          class="react-chain mb-3">
+          v-if="hasCotChain"
+          class="cot-chain mb-3">
           <button
             class="flex items-center gap-1 text-xs text-surface-500 hover:text-surface-700 dark:hover:text-surface-300 transition-colors"
             @click="toggleThinking">
@@ -222,15 +233,15 @@ function getStepLabel(type) {
               class="pi"
               :class="showThinking ? 'pi-chevron-down' : 'pi-chevron-right'" />
             <i class="pi pi-sitemap" />
-            <span>推理过程 ({{ reactSteps.length }} 步)</span>
+            <span>推理过程 ({{ cotSteps.length }} 步)</span>
           </button>
           <div
             v-show="showThinking"
-            class="react-steps">
+            class="cot-steps">
             <div
-              v-for="(step, index) in reactSteps"
+              v-for="(step, index) in cotSteps"
               :key="index"
-              class="react-step"
+              class="cot-step"
               :class="getStepStyle(step.type).color">
               <div class="step-header">
                 <i
@@ -340,45 +351,59 @@ function getStepLabel(type) {
   color: #f59e0b;
 }
 
-/* 思考类型 - 橙色 */
-.timeline-item.thought .timeline-marker i {
+/* 任务规划类型 - 紫色 */
+.timeline-item.planning .timeline-marker i {
+  color: #8b5cf6;
+}
+
+.timeline-item.planning .timeline-content {
+  background-color: color-mix(in srgb, #8b5cf6 8%, transparent);
+  border-color: color-mix(in srgb, #8b5cf6 20%, transparent);
+}
+
+.timeline-item.planning .timeline-label {
+  color: #7c3aed;
+}
+
+/* 执行步骤类型 - 橙色 */
+.timeline-item.step .timeline-marker i {
   color: #f59e0b;
 }
 
-.timeline-item.thought .timeline-content {
+.timeline-item.step .timeline-content {
   background-color: color-mix(in srgb, #f59e0b 8%, transparent);
   border-color: color-mix(in srgb, #f59e0b 20%, transparent);
 }
 
-.timeline-item.thought .timeline-label {
+.timeline-item.step .timeline-label {
   color: #d97706;
 }
 
-/* 操作类型 - 蓝色 */
-.timeline-item.action .timeline-marker i {
+/* 工具调用类型 - 蓝色 */
+.timeline-item.tool .timeline-marker i {
   color: #3b82f6;
 }
 
-.timeline-item.action .timeline-content {
+.timeline-item.tool .timeline-content {
   background-color: color-mix(in srgb, #3b82f6 8%, transparent);
   border-color: color-mix(in srgb, #3b82f6 20%, transparent);
 }
 
-.timeline-item.action .timeline-label {
+.timeline-item.tool .timeline-label {
   color: #2563eb;
 }
 
-/* 观察类型 - 绿色 */
-.timeline-item.observation .timeline-marker i {
+/* 执行结果类型 - 绿色 */
+.timeline-item.result .timeline-marker i {
   color: #10b981;
 }
 
-.timeline-item.observation .timeline-content {
+.timeline-item.result .timeline-content {
   background-color: color-mix(in srgb, #10b981 8%, transparent);
   border-color: color-mix(in srgb, #10b981 20%, transparent);
 }
 
-.timeline-item.observation .timeline-label {
+.timeline-item.result .timeline-label {
   color: #059669;
 }
 
@@ -425,47 +450,57 @@ function getStepLabel(type) {
   color: var(--p-surface-400);
 }
 
-.app-dark .timeline-item.thought .timeline-content {
+.app-dark .timeline-item.planning .timeline-content {
+  background-color: color-mix(in srgb, #8b5cf6 12%, transparent);
+  border-color: color-mix(in srgb, #8b5cf6 25%, transparent);
+}
+
+.app-dark .timeline-item.step .timeline-content {
   background-color: color-mix(in srgb, #f59e0b 12%, transparent);
   border-color: color-mix(in srgb, #f59e0b 25%, transparent);
 }
 
-.app-dark .timeline-item.action .timeline-content {
+.app-dark .timeline-item.tool .timeline-content {
   background-color: color-mix(in srgb, #3b82f6 12%, transparent);
   border-color: color-mix(in srgb, #3b82f6 25%, transparent);
 }
 
-.app-dark .timeline-item.observation .timeline-content {
+.app-dark .timeline-item.result .timeline-content {
   background-color: color-mix(in srgb, #10b981 12%, transparent);
   border-color: color-mix(in srgb, #10b981 25%, transparent);
 }
 
-/* ReAct 思维链样式 */
-.react-steps {
+/* CoT 思维链样式 */
+.cot-steps {
   margin-top: 0.5rem;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
 }
 
-.react-step {
+.cot-step {
   padding: 0.5rem 0.75rem;
   border-radius: 0.25rem;
   border-left: 3px solid;
   font-size: 0.875rem;
 }
 
-.react-step.thought {
+.cot-step.planning {
+  background-color: color-mix(in srgb, #8b5cf6 10%, transparent);
+  border-color: #8b5cf6;
+}
+
+.cot-step.step {
   background-color: color-mix(in srgb, #f59e0b 10%, transparent);
   border-color: #f59e0b;
 }
 
-.react-step.action {
+.cot-step.tool {
   background-color: color-mix(in srgb, #3b82f6 10%, transparent);
   border-color: #3b82f6;
 }
 
-.react-step.observation {
+.cot-step.result {
   background-color: color-mix(in srgb, #10b981 10%, transparent);
   border-color: #10b981;
 }
@@ -478,15 +513,19 @@ function getStepLabel(type) {
   margin-bottom: 0.25rem;
 }
 
-.react-step.thought .step-header {
+.cot-step.planning .step-header {
+  color: #7c3aed;
+}
+
+.cot-step.step .step-header {
   color: #d97706;
 }
 
-.react-step.action .step-header {
+.cot-step.tool .step-header {
   color: #2563eb;
 }
 
-.react-step.observation .step-header {
+.cot-step.result .step-header {
   color: #059669;
 }
 
