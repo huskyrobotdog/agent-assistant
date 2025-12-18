@@ -220,8 +220,7 @@ impl McpClient {
                 name: tool_name.into(),
                 arguments: arguments.as_object().cloned(),
             })
-            .await
-            .context("调用工具失败")?;
+            .await?;
 
         let result_text = result
             .content
