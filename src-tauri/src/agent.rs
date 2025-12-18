@@ -33,16 +33,16 @@ Begin!
 
 Question: {{QUERY}}";
 
-// Qwen ReAct 工具描述模板
-// 参考：https://github.com/QwenLM/Qwen/blob/main/examples/react_prompt.md
-pub const TOOL_DESC_TEMPLATE: &str = "{name}: Call this tool to interact with the {name} API. What is the {name} API useful for? {description} Parameters: {parameters} Format the arguments as a JSON object.";
-
 /// 根据工具信息生成工具描述
+/// 参考：https://github.com/QwenLM/Qwen/blob/main/examples/react_prompt.md
 fn format_tool_desc(tool: &McpTool) -> String {
-    TOOL_DESC_TEMPLATE
-        .replace("{name}", &tool.name)
-        .replace("{description}", &tool.description)
-        .replace("{parameters}", &tool.input_schema.to_string())
+    let params_str = serde_json::to_string_pretty(&tool.input_schema).unwrap_or_default();
+    format!(
+        "{name}: Call this tool to interact with the {name} API. What is the {name} API useful for? {desc}\nParameters:\n```json\n{params}\n```\nFormat the arguments as a JSON object.",
+        name = tool.name,
+        desc = tool.description,
+        params = params_str
+    )
 }
 
 /// 构建完整的 ReAct Prompt
