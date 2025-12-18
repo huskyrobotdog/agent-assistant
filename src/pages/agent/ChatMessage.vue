@@ -251,6 +251,8 @@ function getStepStyle(type) {
       return { icon: 'pi-lightbulb', color: 'thought' }
     case 'tool_call':
       return { icon: 'pi-wrench', color: 'tool_call' }
+    case 'final_answer':
+      return { icon: 'pi-check-circle', color: 'final_answer' }
     default:
       return { icon: 'pi-circle', color: '' }
   }
@@ -265,6 +267,8 @@ function getStepLabel(step) {
       return '思考'
     case 'tool_call':
       return step.actionName ? `工具调用: ${step.actionName}` : '工具调用'
+    case 'final_answer':
+      return '总结'
     default:
       return type
   }
@@ -366,6 +370,13 @@ function getStepLabel(step) {
               </div>
             </div>
           </TransitionGroup>
+        </div>
+
+        <!-- 总结分隔线 -->
+        <div
+          v-if="parsedContent.response"
+          class="summary-divider">
+          <span class="summary-label">总结</span>
         </div>
 
         <!-- Markdown 内容（只在有响应内容时显示） -->
@@ -531,6 +542,31 @@ function getStepLabel(step) {
 
 .timeline-item.tool_call .timeline-label {
   color: #0d9488;
+}
+
+/* 总结分隔线样式 */
+.summary-divider {
+  display: flex;
+  align-items: center;
+  margin: 1rem 0;
+  gap: 0.75rem;
+}
+
+.summary-divider::before,
+.summary-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #22c55e 20%, #22c55e 80%, transparent);
+  opacity: 0.5;
+}
+
+.summary-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #22c55e;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 /* 执行结果样式 */
