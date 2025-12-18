@@ -47,7 +47,7 @@ const loadApp = () => {
 
 const startApp = async () => {
     await initDb();
-    await invoke('init_agent_cmd');
+    await invoke('init_agent');
     loadApp()
 }
 

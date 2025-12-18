@@ -94,7 +94,7 @@ async function handleSend(content) {
   scrollToBottom()
 
   try {
-    await invoke('chat_cmd', { message: content })
+    await invoke('chat', { message: content })
   } catch (error) {
     // 更新消息为错误信息
     const msg = messages.value.find((m) => m.id === aiMessageId)

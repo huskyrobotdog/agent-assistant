@@ -3,20 +3,11 @@ mod db;
 mod mcp;
 mod tool;
 
-pub use agent::*;
-pub use mcp::*;
-pub use tool::*;
-
 use tauri::{path::BaseDirectory, Emitter, Manager};
-
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
 
 /// 初始化 Agent
 #[tauri::command]
-async fn init_agent_cmd(app: tauri::AppHandle) -> Result<String, String> {
+async fn init_agent(app: tauri::AppHandle) -> Result<String, String> {
     let model_path = app
         .path()
         .resolve("resources/model/agent", BaseDirectory::Resource)
@@ -32,7 +23,7 @@ async fn init_agent_cmd(app: tauri::AppHandle) -> Result<String, String> {
 
 /// 发送消息给 Agent（流式）
 #[tauri::command]
-async fn chat_cmd(
+async fn chat(
     app: tauri::AppHandle,
     message: String,
     system_prompt: Option<String>,
@@ -64,7 +55,7 @@ pub fn run() {
         )
         // .setup(|app| Ok(()))
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet, init_agent_cmd, chat_cmd,])
+        .invoke_handler(tauri::generate_handler![init_agent, chat,])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
