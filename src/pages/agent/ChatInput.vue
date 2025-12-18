@@ -18,7 +18,7 @@ const props = defineProps({
 
 const emit = defineEmits(['send'])
 
-const inputMessage = ref(`查询一下\`group_buying_ranking_reward_config\`的表结构信息,以表格的形式展示.`)
+const inputMessage = ref('')
 
 const charCount = computed(() => inputMessage.value.length)
 
