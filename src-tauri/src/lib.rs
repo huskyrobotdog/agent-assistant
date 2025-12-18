@@ -1,8 +1,8 @@
 mod agent;
-mod mcp_async;
+mod mcp;
 
 pub use agent::*;
-pub use mcp_async::*;
+pub use mcp::*;
 
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};

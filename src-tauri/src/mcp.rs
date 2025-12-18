@@ -1,5 +1,6 @@
 use crate::agent::{McpTool, ToolCall, ToolResult};
 use anyhow::{Context, Result};
+use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use rmcp::{
     model::{CallToolRequestParam, Tool},
@@ -12,6 +13,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::Mutex as TokioMutex;
+
+/// 全局 MCP 管理器单例
+pub static MCP_MANAGER: Lazy<McpManager> = Lazy::new(McpManager::new);
 
 /// MCP 客户端配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
