@@ -123,25 +123,18 @@ async fn load_mcp_servers_async(
             timeout_secs: None,
         };
 
-        // 收集环境变量配置（敏感信息如密码用 *** 替代）
+        // 构建命名空间：mcp.服务名
+        let namespace = format!("mcp.{}", name);
+
+        // 收集环境变量配置（完整显示，供 agent 使用）
         if !entry.env.is_empty() {
             let env_info: Vec<String> = entry
                 .env
                 .iter()
-                .map(|(k, v)| {
-                    let key_upper = k.to_uppercase();
-                    if key_upper.contains("PASSWORD")
-                        || key_upper.contains("SECRET")
-                        || key_upper.contains("KEY")
-                    {
-                        format!("  {}: (configured)", k)
-                    } else {
-                        format!("  {}: {}", k, v)
-                    }
-                })
+                .map(|(k, v)| format!("  {}: {}", k, v))
                 .collect();
             if !env_info.is_empty() {
-                all_env_configs.push(format!("[{}]\n{}", name, env_info.join("\n")));
+                all_env_configs.push(format!("环境变量 {}\n{}", namespace, env_info.join("\n")));
             }
         }
 
@@ -150,10 +143,10 @@ async fn load_mcp_servers_async(
                 let executor = Arc::new(McpToolExecutorAsync::new(client));
                 executor.cache_tools().await;
 
-                // 注册到 agent（使用同步缓存的工具列表）
+                // 注册到 agent（使用同步缓存的工具列表，带命名空间）
                 let tools = executor.get_tools_cached();
                 for tool in tools {
-                    agent.register_mcp_tool(tool);
+                    agent.register_mcp_tool(tool, &namespace);
                 }
 
                 // 保存 executor 以便后续调用
@@ -432,11 +425,12 @@ async fn add_mcp_server(
     let executor = Arc::new(McpToolExecutorAsync::new(client));
     executor.cache_tools().await;
 
-    // 注册到 agent
+    // 注册到 agent（带命名空间）
+    let namespace = format!("mcp.{}", name);
     if let Some(agent) = state.agent.read().clone() {
         let tools = executor.get_tools_cached();
         for tool in tools {
-            agent.register_mcp_tool(tool);
+            agent.register_mcp_tool(tool, &namespace);
         }
     }
 

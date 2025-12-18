@@ -82,8 +82,8 @@ impl Default for AgentConfig {
             n_ctx: 32768,
             n_threads: 4,
             n_gpu_layers: 99,
-            temperature: 0.6,
-            top_p: 0.95,
+            temperature: 0.2,  // 低温度：更确定性的输出
+            top_p: 0.85,       // 较低的 top_p 减少随机性
             top_k: 20,
             min_p: 0.0,            // Qwen3 推荐 0.0
             presence_penalty: 1.0, // Qwen3 建议 ≤ 2.0，降低以保持输出质量
@@ -170,10 +170,15 @@ impl CoTAgent {
         executors.insert(name.to_string(), executor);
     }
 
-    /// 注册单个 MCP 工具（用于异步场景）
-    pub fn register_mcp_tool(&self, tool: McpTool) {
+    /// 注册单个 MCP 工具（用于异步场景，带命名空间前缀）
+    pub fn register_mcp_tool(&self, tool: McpTool, namespace: &str) {
         let mut tools = self.tools.write();
-        tools.push(tool);
+        let namespaced_tool = McpTool {
+            name: format!("{}.{}", namespace, tool.name),
+            description: tool.description,
+            input_schema: tool.input_schema,
+        };
+        tools.push(namespaced_tool);
     }
 
     /// 设置自定义上下文（如 MCP 环境变量配置）
@@ -287,10 +292,7 @@ impl CoTAgent {
         let context_section = if context.is_empty() {
             String::new()
         } else {
-            format!(
-                "## 环境配置\n\n{}\n\n**重要提示**：\"(configured)\" 表示实际值已隐藏。在连接数据库前，你必须询问用户提供实际的密码。不要使用 \"(configured)\" 作为密码值。",
-                *context
-            )
+            format!("{}", *context)
         };
 
         REACT_PROMPT
@@ -300,9 +302,6 @@ impl CoTAgent {
 
     /// 添加用户消息
     pub fn add_user_message(&self, content: &str) {
-        #[cfg(debug_assertions)]
-        println!("\n💬 [用户输入] {}", content);
-
         let mut messages = self.messages.write();
         messages.push(Message {
             role: Role::User,
@@ -351,22 +350,24 @@ impl CoTAgent {
         *self.state.write() = AgentState::Planning;
 
         #[cfg(debug_assertions)]
-        println!("\n🧠 [开始推理]");
+        {
+            let messages = self.messages.read();
+            println!("\n════════════════════ 调试信息 ════════════════════");
+            
+            // 1. 打印系统提示词
+            if let Some(sys_msg) = messages.iter().find(|m| m.role == Role::System) {
+                println!("\n� [系统提示词]\n{}", sys_msg.content);
+            }
+            
+            // 2. 打印用户输入
+            if let Some(user_msg) = messages.iter().rev().find(|m| m.role == Role::User) {
+                println!("\n� [用户输入]\n{}", user_msg.content);
+            }
+            
+            println!("\n🧠 [AI 回复]");
+        }
 
         let prompt = self.build_prompt()?;
-
-        #[cfg(debug_assertions)]
-        {
-            let char_count = prompt.chars().count();
-            println!("\n📝 [Prompt 长度] {} 字符", char_count);
-            // 打印 prompt 的最后 200 个字符（避免输出过多）
-            if char_count > 200 {
-                let tail: String = prompt.chars().skip(char_count - 200).collect();
-                println!("\n📝 [Prompt 末尾] ...{}", tail);
-            } else {
-                println!("\n📝 [Prompt] {}", prompt);
-            }
-        }
 
         let ctx_params = LlamaContextParams::default()
             .with_n_ctx(Some(NonZeroU32::new(self.config.n_ctx).unwrap()))
@@ -490,8 +491,8 @@ impl CoTAgent {
     fn parse_tool_calls(&self, response: &str) -> Vec<ToolCall> {
         let mut tool_calls = Vec::new();
 
-        // 格式 1: 中文 ReAct 风格 行动：tool_name[{...}] (优先)
-        let cn_react_re = regex::Regex::new(r"行动[：:]\s*(\w+)\s*\[(\{.*?\})\]").ok();
+        // 格式 1: 中文 ReAct 风格 行动：tool_name[{...}] (优先，支持命名空间如 mcp.mysql.connect_db)
+        let cn_react_re = regex::Regex::new(r"行动[：:]\s*([\w.]+)\s*\[(\{.*?\})\]").ok();
         if let Some(re) = cn_react_re {
             for cap in re.captures_iter(response) {
                 if let (Some(name), Some(args)) = (cap.get(1), cap.get(2)) {
@@ -620,7 +621,14 @@ impl CoTAgent {
 
         #[cfg(debug_assertions)]
         if !tool_calls.is_empty() {
-            println!("\n🔧 [检测到工具调用] {:?}", tool_calls);
+            println!("\n🔧 [检测到工具调用] 共 {} 个", tool_calls.len());
+            for (i, tc) in tool_calls.iter().enumerate() {
+                println!("  [{}/{}] 工具: {}", i + 1, tool_calls.len(), tc.name);
+                println!(
+                    "        参数: {}",
+                    serde_json::to_string_pretty(&tc.arguments).unwrap_or_default()
+                );
+            }
         }
 
         if !tool_calls.is_empty() {
@@ -690,13 +698,26 @@ impl CoTAgent {
         )
     }
 
-    /// 执行工具调用
+    /// 执行工具调用（支持命名空间格式如 mcp.mysql.connect_db）
     fn execute_tool(&self, tool_call: &ToolCall) -> Result<ToolResult> {
         #[cfg(debug_assertions)]
         println!(
             "\n⚡ [执行工具] {} 参数: {}",
             tool_call.name, tool_call.arguments
         );
+
+        // 从命名空间格式中提取原始工具名（mcp.mysql.connect_db -> connect_db）
+        let original_tool_name = tool_call
+            .name
+            .rsplit('.')
+            .next()
+            .unwrap_or(&tool_call.name);
+
+        // 创建使用原始工具名的 ToolCall
+        let original_tool_call = ToolCall {
+            name: original_tool_name.to_string(),
+            arguments: tool_call.arguments.clone(),
+        };
 
         let executor_opt = {
             let executors = self.tool_executors.read();
@@ -706,16 +727,17 @@ impl CoTAgent {
                     executor
                         .get_tools()
                         .iter()
-                        .any(|t| t.name == tool_call.name)
+                        .any(|t| t.name == original_tool_name)
                 })
                 .map(|(_, executor)| executor.clone())
         };
 
         if let Some(executor) = executor_opt {
-            let result = executor.execute(tool_call);
+            let result = executor.execute(&original_tool_call);
             #[cfg(debug_assertions)]
             if let Ok(ref r) = result {
-                println!("\n📤 [工具结果] {}: {}", r.tool_name, r.result);
+                println!("\n📤 [工具结果] {}", r.tool_name);
+                println!("{}", r.result);
             }
             // 截断过长的结果
             return result.map(|mut r| {
