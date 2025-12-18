@@ -305,18 +305,31 @@ async fn chat(
     Ok(final_response)
 }
 
-/// 异步执行工具调用
+/// 异步执行工具调用（支持命名空间格式如 mcp.mysql.connect_db）
 async fn execute_tool_async(
     state: &tauri::State<'_, TauriAgentState>,
     tool_call: &ToolCall,
 ) -> ToolResult {
     let executors = state.mcp_executors.lock().await;
 
+    // 从命名空间格式中提取原始工具名（mcp.mysql.connect_db -> connect_db）
+    let original_tool_name = tool_call
+        .name
+        .rsplit('.')
+        .next()
+        .unwrap_or(&tool_call.name);
+
+    // 创建使用原始工具名的 ToolCall
+    let original_tool_call = ToolCall {
+        name: original_tool_name.to_string(),
+        arguments: tool_call.arguments.clone(),
+    };
+
     // 查找能执行此工具的 executor
     for executor in executors.values() {
         let tools = executor.get_tools_cached();
-        if tools.iter().any(|t| t.name == tool_call.name) {
-            match executor.execute_async(tool_call).await {
+        if tools.iter().any(|t| t.name == original_tool_name) {
+            match executor.execute_async(&original_tool_call).await {
                 Ok(result) => return result,
                 Err(e) => {
                     return ToolResult {

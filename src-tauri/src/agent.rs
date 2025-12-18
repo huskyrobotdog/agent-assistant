@@ -352,16 +352,25 @@ impl CoTAgent {
         #[cfg(debug_assertions)]
         {
             let messages = self.messages.read();
-            println!("\n════════════════════ 调试信息 ════════════════════");
             
-            // 1. 打印系统提示词
-            if let Some(sys_msg) = messages.iter().find(|m| m.role == Role::System) {
-                println!("\n� [系统提示词]\n{}", sys_msg.content);
-            }
+            // 只有第一次（只有系统提示词和用户消息）时打印完整调试信息
+            let is_first_turn = messages.len() <= 2;
             
-            // 2. 打印用户输入
-            if let Some(user_msg) = messages.iter().rev().find(|m| m.role == Role::User) {
-                println!("\n� [用户输入]\n{}", user_msg.content);
+            if is_first_turn {
+                println!("\n════════════════════ 调试信息 ════════════════════");
+                
+                // 1. 打印系统提示词
+                if let Some(sys_msg) = messages.iter().find(|m| m.role == Role::System) {
+                    println!("\n📋 [系统提示词]\n{}", sys_msg.content);
+                }
+                
+                // 2. 打印用户输入
+                if let Some(user_msg) = messages.iter().rev().find(|m| m.role == Role::User) {
+                    println!("\n💬 [用户输入]\n{}", user_msg.content);
+                }
+            } else {
+                // 后续轮次只打印简短信息
+                println!("\n🔄 [继续推理] 当前消息数: {}", messages.len());
             }
             
             println!("\n🧠 [AI 回复]");
