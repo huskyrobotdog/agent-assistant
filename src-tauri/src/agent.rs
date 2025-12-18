@@ -1,4 +1,4 @@
-use crate::mcp::{McpTool, ToolCall, ToolResult};
+use crate::mcp::{McpClientConfig, McpTool, ToolCall, ToolResult};
 use anyhow::{Context, Result};
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::context::LlamaContext;
@@ -45,8 +45,40 @@ fn format_tool_desc(tool: &McpTool) -> String {
     )
 }
 
+/// 构建服务器上下文提示词
+fn build_server_context(configs: &[(String, McpClientConfig)]) -> String {
+    if configs.is_empty() {
+        return String::new();
+    }
+
+    let mut result =
+        String::from("\n\nNote: The following MCP servers are already configured and connected:\n");
+    for (name, config) in configs {
+        result.push_str(&format!("- Server '{}':\n", name));
+        result.push_str(&format!(
+            "  command: {} {}\n",
+            config.command,
+            config.args.join(" ")
+        ));
+        if !config.env.is_empty() {
+            result.push_str("  environment:\n");
+            for (key, value) in &config.env {
+                result.push_str(&format!("    {}: {}\n", key, value));
+            }
+        }
+    }
+    result.push_str(
+        "These environment variables are pre-configured, you don't need to provide them again.\n",
+    );
+    result
+}
+
 /// 构建完整的 ReAct Prompt
-pub fn build_react_prompt(query: &str, tools: &[McpTool]) -> String {
+pub fn build_react_prompt(
+    query: &str,
+    tools: &[McpTool],
+    server_configs: &[(String, McpClientConfig)],
+) -> String {
     let (tools_prompt, tool_names) = if tools.is_empty() {
         (String::new(), String::new())
     } else {
@@ -55,8 +87,10 @@ pub fn build_react_prompt(query: &str, tools: &[McpTool]) -> String {
         (descs.join("\n\n"), names.join(","))
     };
 
+    let context_prompt = build_server_context(server_configs);
+
     REACT_PROMPT_TEMPLATE
-        .replace("{{TOOLS}}", &tools_prompt)
+        .replace("{{TOOLS}}", &format!("{}{}", tools_prompt, context_prompt))
         .replace("{{TOOL_NAMES}}", &tool_names)
         .replace("{{QUERY}}", query)
 }
@@ -108,11 +142,13 @@ fn execute_tool(tool_call: &ToolCall) -> Result<ToolResult> {
 /// - query: 用户问题
 /// - callback: 流式输出回调
 pub fn chat(query: &str, callback: Option<&dyn Fn(&str)>) -> Result<String> {
-    // 获取工具列表
+    // 获取工具列表和服务器配置
     let tools = tauri::async_runtime::block_on(crate::mcp::MCP_MANAGER.get_all_tools());
+    let server_configs =
+        tauri::async_runtime::block_on(crate::mcp::MCP_MANAGER.get_server_configs());
 
     // 构建 ReAct Prompt
-    let prompt = build_react_prompt(query, &tools);
+    let prompt = build_react_prompt(query, &tools, &server_configs);
 
     let mut guard = AGENT.lock();
     let agent = guard.as_mut().context("Agent 未初始化")?;
@@ -233,7 +269,10 @@ impl Agent {
     /// ReAct 循环（有工具时自动调用）
     pub fn react_loop(&mut self, prompt: &str, callback: Option<&dyn Fn(&str)>) -> Result<String> {
         #[cfg(debug_assertions)]
-        println!("[Agent] 开始 ReAct 循环");
+        {
+            println!("[Agent] 开始 ReAct 循环");
+            println!("[Agent] 初始 Prompt:\n{}", prompt);
+        }
 
         // 构建消息历史
         let mut messages: Vec<(String, String)> = Vec::new();
@@ -244,6 +283,11 @@ impl Agent {
         for iteration in 0..MAX_TOOL_CALLS {
             // 构建 prompt
             let full_prompt = self.build_prompt_from_messages(&messages)?;
+
+            #[cfg(debug_assertions)]
+            if iteration > 0 {
+                println!("[Agent] 增量消息: {:?}", messages.last());
+            }
 
             // 生成回复
             #[cfg(debug_assertions)]

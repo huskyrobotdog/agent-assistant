@@ -296,6 +296,15 @@ impl McpManager {
         all_tools
     }
 
+    /// 获取所有服务器的配置信息（用于构建提示词）
+    pub async fn get_server_configs(&self) -> Vec<(String, McpClientConfig)> {
+        let clients = self.clients.lock().await;
+        clients
+            .iter()
+            .map(|(name, client)| (name.clone(), client.config.clone()))
+            .collect()
+    }
+
     /// 通过工具名执行工具（自动查找对应的服务器）
     pub async fn execute_tool(
         &self,
