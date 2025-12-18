@@ -89,15 +89,24 @@ const parsedContent = computed(() => {
   let currentType = null
   let currentContent = []
   let finalAnswer = ''
+  // 工具调用临时存储
+  let currentToolCall = null
 
   function saveCurrentStep() {
-    if (currentType && currentContent.length > 0) {
+    if (currentType === 'thought' && currentContent.length > 0) {
       const text = currentContent.join('\n').trim()
       if (text) {
-        steps.push({ type: currentType, content: text })
+        steps.push({ type: 'thought', content: text })
       }
     }
     currentContent = []
+  }
+
+  function saveToolCall() {
+    if (currentToolCall) {
+      steps.push({ ...currentToolCall })
+      currentToolCall = null
+    }
   }
 
   for (let i = 0; i < lines.length; i++) {
@@ -105,38 +114,52 @@ const parsedContent = computed(() => {
 
     if (line.startsWith('Thought:')) {
       saveCurrentStep()
+      saveToolCall()
       currentType = 'thought'
       currentContent = [line.substring(8).trim()]
     } else if (line.startsWith('Action:')) {
       saveCurrentStep()
+      saveToolCall()
       currentType = 'action'
-      currentContent = [line.substring(7).trim()]
+      currentToolCall = {
+        type: 'tool_call',
+        actionName: line.substring(7).trim(),
+        actionInput: '',
+        observation: '',
+      }
     } else if (line.startsWith('Action Input:')) {
-      saveCurrentStep()
-      currentType = 'action_input'
-      currentContent = [line.substring(13).trim()]
+      if (currentToolCall) {
+        currentToolCall.actionInput = line.substring(13).trim()
+      }
     } else if (line.startsWith('Observation:') || line.startsWith('Observ')) {
-      saveCurrentStep()
+      if (currentToolCall) {
+        const text = line.startsWith('Observation:') ? line.substring(12).trim() : line.substring(6).trim()
+        currentToolCall.observation = text
+      }
       currentType = 'observation'
-      const text = line.startsWith('Observation:') ? line.substring(12).trim() : line.substring(6).trim()
-      currentContent = [text]
     } else if (line.startsWith('Final Answer:')) {
       saveCurrentStep()
+      saveToolCall()
       currentType = null
       finalAnswer = line.substring(13).trim()
-      // 后续所有内容都是 Final Answer
       for (let j = i + 1; j < lines.length; j++) {
         finalAnswer += '\n' + lines[j]
       }
       finalAnswer = finalAnswer.trim()
       break
-    } else if (currentType) {
+    } else if (currentType === 'thought') {
       currentContent.push(line)
+    } else if (currentType === 'observation' && currentToolCall) {
+      currentToolCall.observation += '\n' + line
+    } else if (currentToolCall && !currentToolCall.observation) {
+      // 多行 Action Input
+      currentToolCall.actionInput += '\n' + line
     }
   }
 
   // 保存最后的内容
   saveCurrentStep()
+  saveToolCall()
 
   // 检测流式状态
   const isStreaming = isReactFormat && !finalAnswer && steps.length > 0
@@ -205,12 +228,8 @@ function getStepStyle(type) {
       return { icon: 'pi-sparkles', color: 'thinking' }
     case 'thought':
       return { icon: 'pi-lightbulb', color: 'thought' }
-    case 'action':
-      return { icon: 'pi-bolt', color: 'action' }
-    case 'action_input':
-      return { icon: 'pi-code', color: 'action_input' }
-    case 'observation':
-      return { icon: 'pi-eye', color: 'observation' }
+    case 'tool_call':
+      return { icon: 'pi-wrench', color: 'tool_call' }
     default:
       return { icon: 'pi-circle', color: '' }
   }
@@ -223,12 +242,8 @@ function getStepLabel(step) {
       return '推理'
     case 'thought':
       return '思考'
-    case 'action':
-      return '动作'
-    case 'action_input':
-      return '动作输入'
-    case 'observation':
-      return '观察结果'
+    case 'tool_call':
+      return step.actionName ? `工具调用: ${step.actionName}` : '工具调用'
     default:
       return type
   }
@@ -308,12 +323,20 @@ function getStepLabel(step) {
               </div>
               <div class="timeline-content">
                 <div class="timeline-label">{{ getStepLabel(step) }}</div>
-                <!-- 工具调用特殊显示：固定高度的代码区域 -->
-                <div
-                  v-if="step.type === 'tool' && step.toolInput"
-                  class="tool-input-box">
-                  <pre class="tool-input-code">{{ step.toolInput }}</pre>
-                </div>
+                <!-- 工具调用特殊显示 -->
+                <template v-if="step.type === 'tool_call'">
+                  <div
+                    v-if="step.actionInput"
+                    class="timeline-text selectable">
+                    {{ step.actionInput }}
+                  </div>
+                  <div
+                    v-if="step.observation"
+                    class="tool-observation">
+                    <div class="observation-label">执行结果</div>
+                    <div class="timeline-text selectable">{{ step.observation }}</div>
+                  </div>
+                </template>
                 <div
                   v-else
                   class="timeline-text selectable text-animate">
@@ -411,11 +434,15 @@ function getStepLabel(step) {
 
 .timeline-item {
   position: relative;
-  padding-bottom: 0.75rem;
+  padding-bottom: 1rem;
 }
 
 .timeline-item:last-child {
   padding-bottom: 0;
+}
+
+.timeline-item + .timeline-item {
+  margin-top: 0.25rem;
 }
 
 .timeline-marker {
@@ -437,74 +464,66 @@ function getStepLabel(step) {
   color: #f59e0b;
 }
 
-/* 推理类型 - 青色 */
+/* 推理类型 - 灰色 */
 .timeline-item.thinking .timeline-marker i {
-  color: #06b6d4;
+  color: #64748b;
 }
 
 .timeline-item.thinking .timeline-content {
-  background-color: color-mix(in srgb, #06b6d4 8%, transparent);
-  border-color: color-mix(in srgb, #06b6d4 20%, transparent);
+  background-color: color-mix(in srgb, #64748b 6%, transparent);
+  border-color: color-mix(in srgb, #64748b 15%, transparent);
 }
 
 .timeline-item.thinking .timeline-label {
-  color: #0891b2;
+  color: #475569;
 }
 
-/* 思考类型 - 紫色 */
+/* 思考类型 - 青蓝色 */
 .timeline-item.thought .timeline-marker i {
-  color: #8b5cf6;
+  color: #0ea5e9;
 }
 
 .timeline-item.thought .timeline-content {
-  background-color: color-mix(in srgb, #8b5cf6 8%, transparent);
-  border-color: color-mix(in srgb, #8b5cf6 20%, transparent);
+  background-color: color-mix(in srgb, #0ea5e9 6%, transparent);
+  border-color: color-mix(in srgb, #0ea5e9 15%, transparent);
 }
 
 .timeline-item.thought .timeline-label {
-  color: #7c3aed;
+  color: #0284c7;
 }
 
-/* 动作类型 - 橙色 */
-.timeline-item.action .timeline-marker i {
-  color: #f59e0b;
+/* 工具调用类型 - 青色 */
+.timeline-item.tool_call .timeline-marker i {
+  color: #14b8a6;
 }
 
-.timeline-item.action .timeline-content {
-  background-color: color-mix(in srgb, #f59e0b 8%, transparent);
-  border-color: color-mix(in srgb, #f59e0b 20%, transparent);
+.timeline-item.tool_call .timeline-content {
+  background-color: color-mix(in srgb, #14b8a6 6%, transparent);
+  border-color: color-mix(in srgb, #14b8a6 15%, transparent);
 }
 
-.timeline-item.action .timeline-label {
-  color: #d97706;
+.timeline-item.tool_call .timeline-label {
+  color: #0d9488;
 }
 
-/* 动作输入类型 - 蓝色 */
-.timeline-item.action_input .timeline-marker i {
-  color: #3b82f6;
+/* 执行结果样式 */
+.tool-observation {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--p-surface-200);
 }
 
-.timeline-item.action_input .timeline-content {
-  background-color: color-mix(in srgb, #3b82f6 8%, transparent);
-  border-color: color-mix(in srgb, #3b82f6 20%, transparent);
+.app-dark .tool-observation {
+  border-top-color: var(--p-surface-600);
 }
 
-.timeline-item.action_input .timeline-label {
-  color: #2563eb;
-}
-
-/* 观察结果类型 - 绿色 */
-.timeline-item.observation .timeline-marker i {
-  color: #10b981;
-}
-
-.timeline-item.observation .timeline-content {
-  background-color: color-mix(in srgb, #10b981 8%, transparent);
-  border-color: color-mix(in srgb, #10b981 20%, transparent);
-}
-
-.timeline-item.observation .timeline-label {
-  color: #059669;
+.observation-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #0d9488;
+  margin-bottom: 0.375rem;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
 }
 
 /* 工具输入框样式 - 固定高度可滚动 */
@@ -650,11 +669,16 @@ function getStepLabel(step) {
 }
 
 .timeline-content {
-  background-color: color-mix(in srgb, #f59e0b 8%, transparent);
-  border-radius: 0.375rem;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid color-mix(in srgb, #f59e0b 20%, transparent);
+  background-color: var(--p-surface-50);
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--p-surface-200);
   transition: all 0.3s ease;
+}
+
+.app-dark .timeline-content {
+  background-color: var(--p-surface-800);
+  border-color: var(--p-surface-700);
 }
 
 .timeline-label {
@@ -680,28 +704,18 @@ function getStepLabel(step) {
 }
 
 .app-dark .timeline-item.thinking .timeline-content {
-  background-color: color-mix(in srgb, #06b6d4 12%, transparent);
-  border-color: color-mix(in srgb, #06b6d4 25%, transparent);
+  background-color: color-mix(in srgb, #64748b 10%, transparent);
+  border-color: color-mix(in srgb, #64748b 20%, transparent);
 }
 
 .app-dark .timeline-item.thought .timeline-content {
-  background-color: color-mix(in srgb, #8b5cf6 12%, transparent);
-  border-color: color-mix(in srgb, #8b5cf6 25%, transparent);
+  background-color: color-mix(in srgb, #0ea5e9 10%, transparent);
+  border-color: color-mix(in srgb, #0ea5e9 20%, transparent);
 }
 
-.app-dark .timeline-item.action .timeline-content {
-  background-color: color-mix(in srgb, #f59e0b 12%, transparent);
-  border-color: color-mix(in srgb, #f59e0b 25%, transparent);
-}
-
-.app-dark .timeline-item.action_input .timeline-content {
-  background-color: color-mix(in srgb, #3b82f6 12%, transparent);
-  border-color: color-mix(in srgb, #3b82f6 25%, transparent);
-}
-
-.app-dark .timeline-item.observation .timeline-content {
-  background-color: color-mix(in srgb, #10b981 12%, transparent);
-  border-color: color-mix(in srgb, #10b981 25%, transparent);
+.app-dark .timeline-item.tool_call .timeline-content {
+  background-color: color-mix(in srgb, #14b8a6 10%, transparent);
+  border-color: color-mix(in srgb, #14b8a6 20%, transparent);
 }
 
 /* Markdown 样式 */
