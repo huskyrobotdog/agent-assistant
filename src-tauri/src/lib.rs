@@ -34,39 +34,6 @@ async fn init_mcp(app: tauri::AppHandle) -> Result<String, String> {
     Ok("MCP 初始化成功".to_string())
 }
 
-/// 获取 prompt 文件内容
-#[tauri::command]
-async fn get_prompt(app: tauri::AppHandle, name: String) -> Result<String, String> {
-    let prompt_path = app
-        .path()
-        .resolve(
-            format!("resources/prompt/{}.md", name),
-            BaseDirectory::Resource,
-        )
-        .map_err(|e| format!("获取 prompt 路径失败: {}", e))?;
-
-    std::fs::read_to_string(&prompt_path).map_err(|e| format!("读取 prompt 文件失败: {}", e))
-}
-
-/// 获取 MCP 工具描述作为 prompt
-#[tauri::command]
-async fn get_mcp_prompt() -> Result<String, String> {
-    let tools = mcp::MCP_MANAGER.get_all_tools().await;
-
-    if tools.is_empty() {
-        return Ok(String::new());
-    }
-
-    let mut prompt = String::from("# 可用工具\n\n");
-    for tool in tools {
-        prompt.push_str(&format!("## {}\n", tool.name));
-        prompt.push_str(&format!("{}\n\n", tool.description));
-        prompt.push_str(&format!("参数: {}\n\n", tool.input_schema));
-    }
-
-    Ok(prompt)
-}
-
 /// 发送消息给 Agent（流式）
 #[tauri::command]
 async fn chat(
@@ -102,13 +69,7 @@ pub fn run() {
         )
         // .setup(|app| Ok(()))
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![
-            init_agent,
-            init_mcp,
-            get_prompt,
-            get_mcp_prompt,
-            chat,
-        ])
+        .invoke_handler(tauri::generate_handler![init_agent, init_mcp, chat])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
