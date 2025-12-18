@@ -335,6 +335,25 @@ impl McpManager {
         all_tools
     }
 
+    /// 通过工具名执行工具（自动查找对应的服务器）
+    pub async fn execute_tool(
+        &self,
+        tool_name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<ToolResult> {
+        let clients = self.clients.lock().await;
+
+        // 遍历所有客户端，查找包含该工具的服务器
+        for client in clients.values() {
+            let tools = client.get_tools().await;
+            if tools.iter().any(|t| t.name == tool_name) {
+                return client.call_tool(tool_name, arguments).await;
+            }
+        }
+
+        Err(anyhow::anyhow!("未找到工具: {}", tool_name))
+    }
+
     /// 获取所有客户端名称
     pub async fn get_server_names(&self) -> Vec<String> {
         let clients = self.clients.lock().await;

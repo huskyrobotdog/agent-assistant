@@ -12,6 +12,47 @@ use parking_lot::Mutex;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 
+// ReAct Prompt 模板（编译时嵌入）
+pub const REACT_PROMPT_TEMPLATE: &str = include_str!("../resources/prompt/agent.md");
+
+// Qwen ReAct 工具描述模板
+// 参考：https://github.com/QwenLM/Qwen/blob/main/examples/react_prompt.md
+pub const TOOL_DESC_TEMPLATE: &str = "{name}: Call this tool to interact with the {name} API. What is the {name} API useful for? {description} Parameters: {parameters} Format the arguments as a JSON object.";
+
+/// 根据工具信息生成工具描述
+fn format_tool_desc(name: &str, description: &str, parameters: &str) -> String {
+    TOOL_DESC_TEMPLATE
+        .replace("{name}", name)
+        .replace("{description}", description)
+        .replace("{parameters}", parameters)
+}
+
+/// 工具信息结构（用于构建 prompt）
+pub struct ToolInfo {
+    pub name: String,
+    pub description: String,
+    pub parameters: String,
+}
+
+/// 构建完整的 ReAct Prompt
+pub fn build_react_prompt(query: &str, tools: &[ToolInfo]) -> String {
+    let (tools_prompt, tool_names) = if tools.is_empty() {
+        (String::new(), String::new())
+    } else {
+        let descs: Vec<String> = tools
+            .iter()
+            .map(|t| format_tool_desc(&t.name, &t.description, &t.parameters))
+            .collect();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        (descs.join("\n\n"), names.join(","))
+    };
+
+    REACT_PROMPT_TEMPLATE
+        .replace("{{TOOLS}}", &tools_prompt)
+        .replace("{{TOOL_NAMES}}", &tool_names)
+        .replace("{{QUERY}}", query)
+}
+
 // 模型配置常量
 const N_CTX: u32 = 32768;
 const N_THREADS: i32 = 4;
@@ -43,27 +84,34 @@ pub fn init(model_path: PathBuf) -> Result<()> {
     Ok(())
 }
 
-/// 使用全局 Agent 进行对话
-pub fn chat(
-    user_input: &str,
-    system_prompt: Option<&str>,
-    callback: Option<&dyn Fn(&str)>,
-) -> Result<String> {
-    let mut guard = AGENT.lock();
-    let agent = guard.as_mut().context("Agent 未初始化")?;
-    agent.chat(user_input, system_prompt, callback, None)
+/// 执行工具调用（通过 MCP_MANAGER）
+fn execute_tool(tool_call: &ToolCall) -> Result<ToolResult> {
+    // 在当前线程创建一个新的 tokio runtime 来执行异步调用
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    rt.block_on(crate::mcp::MCP_MANAGER.execute_tool(&tool_call.name, tool_call.arguments.clone()))
 }
 
-/// 使用全局 Agent 进行对话（带工具执行器）
-pub fn chat_with_tools(
-    user_input: &str,
-    system_prompt: Option<&str>,
-    callback: Option<&dyn Fn(&str)>,
-    tool_executor: Option<&dyn Fn(&ToolCall) -> Result<ToolResult>>,
-) -> Result<String> {
+/// 使用全局 Agent 进行对话
+/// - query: 用户问题
+/// - tools: 可用工具列表（为空则不使用工具）
+/// - callback: 流式输出回调
+pub fn chat(query: &str, tools: &[ToolInfo], callback: Option<&dyn Fn(&str)>) -> Result<String> {
+    // 构建 ReAct Prompt
+    let prompt = build_react_prompt(query, tools);
+
     let mut guard = AGENT.lock();
     let agent = guard.as_mut().context("Agent 未初始化")?;
-    agent.chat(user_input, system_prompt, callback, tool_executor)
+
+    // 如果没有工具，直接生成回复
+    if tools.is_empty() {
+        return agent.generate_simple(&prompt, callback);
+    }
+
+    // 有工具时，进入 ReAct 循环
+    agent.react_loop(&prompt, callback)
 }
 
 /// 解析工具调用（Qwen ReAct 格式：Action: xxx\nAction Input: {...}）
@@ -157,39 +205,39 @@ impl Agent {
         Ok(Self { model, ctx })
     }
 
-    /// 对话函数 - 支持工具调用循环
-    pub fn chat(
+    /// 简单生成（无工具）
+    pub fn generate_simple(
         &mut self,
-        user_input: &str,
-        system_prompt: Option<&str>,
+        prompt: &str,
         callback: Option<&dyn Fn(&str)>,
-        tool_executor: Option<&dyn Fn(&ToolCall) -> Result<ToolResult>>,
     ) -> Result<String> {
+        let messages = vec![("user".to_string(), prompt.to_string())];
+        let full_prompt = self.build_prompt_from_messages(&messages)?;
+        let response = self.generate(&full_prompt, callback)?;
+        self.clear_kv_cache();
+        Ok(response)
+    }
+
+    /// ReAct 循环（有工具时自动调用）
+    pub fn react_loop(&mut self, prompt: &str, callback: Option<&dyn Fn(&str)>) -> Result<String> {
         #[cfg(debug_assertions)]
-        if let Some(sp) = system_prompt {
-            println!("[Agent] 系统提示词: {}", sp);
-        }
-        #[cfg(debug_assertions)]
-        println!("[Agent] 用户消息: {}", user_input);
+        println!("[Agent] 开始 ReAct 循环");
 
         // 构建消息历史
         let mut messages: Vec<(String, String)> = Vec::new();
-        if let Some(sp) = system_prompt {
-            messages.push(("system".to_string(), sp.to_string()));
-        }
-        messages.push(("user".to_string(), user_input.to_string()));
+        messages.push(("user".to_string(), prompt.to_string()));
 
         let mut final_response = String::new();
-        const MAX_TOOL_CALLS: usize = 10; // 防止无限循环
+        const MAX_TOOL_CALLS: usize = 10;
 
         for iteration in 0..MAX_TOOL_CALLS {
             // 构建 prompt
-            let prompt = self.build_prompt_from_messages(&messages)?;
+            let full_prompt = self.build_prompt_from_messages(&messages)?;
 
             // 生成回复
             #[cfg(debug_assertions)]
             print!("[Agent] 响应 #{}: ", iteration + 1);
-            let response = self.generate(&prompt, callback)?;
+            let response = self.generate(&full_prompt, callback)?;
             #[cfg(debug_assertions)]
             println!();
 
@@ -207,38 +255,32 @@ impl Agent {
                 // 添加 assistant 消息
                 messages.push(("assistant".to_string(), response.clone()));
 
-                // 执行工具
-                if let Some(executor) = tool_executor {
-                    match executor(&tool_call) {
-                        Ok(result) => {
-                            #[cfg(debug_assertions)]
-                            println!("[Agent] 工具结果: {}", result.result);
+                // 执行工具（通过 MCP_MANAGER）
+                match execute_tool(&tool_call) {
+                    Ok(result) => {
+                        #[cfg(debug_assertions)]
+                        println!("[Agent] 工具结果: {}", result.result);
 
-                            // 添加观察结果（Qwen ReAct 格式）
-                            let observation = format!("\nObservation: {}", result.result);
-                            if let Some(cb) = callback {
-                                cb(&observation);
-                            }
-                            messages.push((
-                                "user".to_string(),
-                                format!("Observation: {}", result.result),
-                            ));
+                        // 添加观察结果（Qwen ReAct 格式）
+                        let observation = format!("\nObservation: {}", result.result);
+                        if let Some(cb) = callback {
+                            cb(&observation);
                         }
-                        Err(e) => {
-                            #[cfg(debug_assertions)]
-                            println!("[Agent] 工具执行失败: {}", e);
-
-                            let error_msg = format!("Observation: Tool execution failed - {}", e);
-                            if let Some(cb) = callback {
-                                cb(&format!("\n{}", error_msg));
-                            }
-                            messages.push(("user".to_string(), error_msg));
-                        }
+                        messages.push((
+                            "user".to_string(),
+                            format!("Observation: {}", result.result),
+                        ));
                     }
-                } else {
-                    // 没有工具执行器，返回当前响应
-                    final_response = response;
-                    break;
+                    Err(e) => {
+                        #[cfg(debug_assertions)]
+                        println!("[Agent] 工具执行失败: {}", e);
+
+                        let error_msg = format!("Observation: Tool execution failed - {}", e);
+                        if let Some(cb) = callback {
+                            cb(&format!("\n{}", error_msg));
+                        }
+                        messages.push(("user".to_string(), error_msg));
+                    }
                 }
             } else {
                 // 没有工具调用，返回最终响应
