@@ -53,7 +53,7 @@ async fn init_agent(
     };
 
     // 在后台线程加载模型，避免阻塞主线程
-    let agent = tokio::task::spawn_blocking(move || ReactAgent::new(config))
+    let agent = tauri::async_runtime::spawn_blocking(move || ReactAgent::new(config))
         .await
         .map_err(|e| format!("任务执行失败: {}", e))?
         .map_err(|e| e.to_string())?;
@@ -145,7 +145,7 @@ async fn chat(
     let app_clone2 = app.clone();
 
     // 在后台线程执行推理，避免阻塞主线程
-    let response = tokio::task::spawn_blocking(move || {
+    let response = tauri::async_runtime::spawn_blocking(move || {
         let callback = |token: &str| {
             let _ = app_clone.emit("chat-token", token.to_string());
         };
