@@ -41,7 +41,7 @@ const thinkingContent = computed(() => {
   const lastCloseIdx = content.lastIndexOf('</think>')
   if (lastOpenIdx > lastCloseIdx) {
     const unclosed = content.substring(lastOpenIdx + 7).trim()
-    if (unclosed) thinkBlocks.push(unclosed + ' ...')
+    if (unclosed) thinkBlocks.push(unclosed)
   }
   return thinkBlocks.join('\n\n')
 })
@@ -102,7 +102,7 @@ const parsedContent = computed(() => {
       if (lastTextIdx >= 0) {
         segments[lastTextIdx].content = segments[lastTextIdx].content.replace(/<think>[\s\S]*$/, '')
       }
-      segments.push({ type: 'think', content: unclosedContent + ' ...' })
+      segments.push({ type: 'think', content: unclosedContent })
     }
   }
 
@@ -431,6 +431,9 @@ function getStepLabel(step) {
 .thinking-timeline {
   position: relative;
   padding-left: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
 }
 
 .thinking-timeline::before {
@@ -456,6 +459,9 @@ function getStepLabel(step) {
 .timeline-item {
   position: relative;
   padding-bottom: 1rem;
+  display: inline-block;
+  width: auto;
+  max-width: 85%;
 }
 
 .timeline-item:last-child {
@@ -609,7 +615,7 @@ function getStepLabel(step) {
 
 /* 步骤平滑展开动画 */
 .step-slide-enter-active {
-  animation: step-enter 0.4s ease-out;
+  animation: step-enter 0.5s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .step-slide-leave-active {
@@ -617,34 +623,35 @@ function getStepLabel(step) {
 }
 
 .step-slide-move {
-  transition: transform 0.4s ease;
+  transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 @keyframes step-enter {
   0% {
     opacity: 0;
-    transform: translateY(-10px);
+    transform: translateY(-10px) scale(0.95);
     max-height: 0;
   }
-  50% {
-    opacity: 0.5;
-    max-height: 100px;
+  60% {
+    opacity: 0.8;
+    transform: translateY(0) scale(1);
+    max-height: 200px;
   }
   100% {
     opacity: 1;
-    transform: translateY(0);
-    max-height: 500px;
+    transform: translateY(0) scale(1);
+    max-height: 1000px;
   }
 }
 
 @keyframes step-leave {
   0% {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(0) scale(1);
   }
   100% {
     opacity: 0;
-    transform: translateY(-10px);
+    transform: translateY(-10px) scale(0.95);
   }
 }
 
@@ -694,7 +701,9 @@ function getStepLabel(step) {
   border-radius: 0.5rem;
   padding: 0.75rem 1rem;
   border: 1px solid var(--p-surface-200);
-  transition: all 0.3s ease;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  width: fit-content;
+  max-width: 100%;
 }
 
 .app-dark .timeline-content {
