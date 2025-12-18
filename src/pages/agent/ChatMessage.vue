@@ -174,14 +174,20 @@ const hasCotChain = computed(() => {
   return props.message.cotChain && props.message.cotChain.length > 0
 })
 
-// 判断是否有思考过程（兼容旧逻辑）
+// 判断是否有思考过程（包含 think 内容或 ReAct 步骤）
 const hasThinking = computed(() => {
-  return hasSteps.value && !hasCotChain.value
+  return (hasThinkingContent.value || hasSteps.value) && !hasCotChain.value
 })
 
-// 获取所有步骤（包括流式的）
+// 获取所有步骤（包括 think 内容和流式的）
 const allSteps = computed(() => {
-  const steps = [...parsedContent.value.steps]
+  const steps = []
+  // 把 think 内容作为第一个步骤
+  if (thinkingContent.value) {
+    steps.push({ type: 'thinking', content: thinkingContent.value })
+  }
+  // 添加 ReAct 步骤
+  steps.push(...parsedContent.value.steps)
   if (streamingStep.value) {
     steps.push({ ...streamingStep.value, isStreaming: true })
   }
@@ -195,6 +201,8 @@ function toggleThinking() {
 // 获取步骤类型的图标和颜色
 function getStepStyle(type) {
   switch (type) {
+    case 'thinking':
+      return { icon: 'pi-sparkles', color: 'thinking' }
     case 'thought':
       return { icon: 'pi-lightbulb', color: 'thought' }
     case 'action':
@@ -211,6 +219,8 @@ function getStepStyle(type) {
 function getStepLabel(step) {
   const type = typeof step === 'string' ? step : step.type
   switch (type) {
+    case 'thinking':
+      return '推理'
     case 'thought':
       return '思考'
     case 'action':
@@ -239,28 +249,6 @@ function getStepLabel(step) {
 
       <!-- AI 消息 -->
       <template v-else>
-        <!-- Think 推理过程 -->
-        <div
-          v-if="hasThinkingContent"
-          class="thinking-block mb-3">
-          <button
-            class="flex items-center gap-1.5 text-xs text-surface-500 hover:text-surface-700 dark:hover:text-surface-300 transition-colors"
-            @click="showThinking = !showThinking">
-            <i
-              class="pi text-xs"
-              :class="showThinking ? 'pi-chevron-down' : 'pi-chevron-right'" />
-            <i class="pi pi-lightbulb text-amber-500" />
-            <span>推理</span>
-          </button>
-          <Transition name="fade-slide">
-            <div
-              v-show="showThinking"
-              class="thinking-content">
-              <pre class="whitespace-pre-wrap text-sm">{{ thinkingContent }}</pre>
-            </div>
-          </Transition>
-        </div>
-
         <!-- CoT 思维链 -->
         <div
           v-if="hasCotChain"
@@ -447,6 +435,20 @@ function getStepLabel(step) {
 .timeline-marker i {
   font-size: 0.75rem;
   color: #f59e0b;
+}
+
+/* 推理类型 - 青色 */
+.timeline-item.thinking .timeline-marker i {
+  color: #06b6d4;
+}
+
+.timeline-item.thinking .timeline-content {
+  background-color: color-mix(in srgb, #06b6d4 8%, transparent);
+  border-color: color-mix(in srgb, #06b6d4 20%, transparent);
+}
+
+.timeline-item.thinking .timeline-label {
+  color: #0891b2;
 }
 
 /* 思考类型 - 紫色 */
@@ -675,6 +677,11 @@ function getStepLabel(step) {
 
 .app-dark .timeline-text {
   color: var(--p-surface-400);
+}
+
+.app-dark .timeline-item.thinking .timeline-content {
+  background-color: color-mix(in srgb, #06b6d4 12%, transparent);
+  border-color: color-mix(in srgb, #06b6d4 25%, transparent);
 }
 
 .app-dark .timeline-item.thought .timeline-content {
