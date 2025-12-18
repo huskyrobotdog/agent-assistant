@@ -88,8 +88,12 @@ unsafe impl Send for Agent {}
 
 /// 初始化全局 Agent（只调用一次）
 pub fn init(model_path: PathBuf) -> Result<()> {
+    let mut guard = AGENT.lock();
+    if guard.is_some() {
+        return Ok(()); // 已初始化，直接返回
+    }
     let agent = Agent::new(model_path)?;
-    *AGENT.lock() = Some(agent);
+    *guard = Some(agent);
     Ok(())
 }
 

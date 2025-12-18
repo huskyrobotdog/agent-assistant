@@ -56,6 +56,11 @@ pub struct McpConfig {
 
 /// 从数据库初始化 MCP
 pub async fn init(db_path: PathBuf) -> Result<()> {
+    // 检查是否已初始化
+    if !MCP_MANAGER.clients.lock().await.is_empty() {
+        return Ok(()); // 已初始化，直接返回
+    }
+
     use rusqlite::Connection;
 
     // 查询配置
