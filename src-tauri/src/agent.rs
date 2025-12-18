@@ -208,6 +208,17 @@ impl CoTAgent {
         callback: Option<&dyn Fn(&str)>,
     ) -> Result<(String, Vec<ToolCall>)> {
         let response = self.generate_with_callback(callback)?;
+
+        // 如果响应包含"总结"，视为任务完成，不再解析工具调用
+        if response.contains("总结：")
+            || response.contains("总结:")
+            || response.contains("Summary:")
+        {
+            #[cfg(debug_assertions)]
+            println!("\n✅ [检测到总结] 任务完成");
+            return Ok((response, Vec::new()));
+        }
+
         let tool_calls = self.parse_tool_calls(&response);
         Ok((response, tool_calls))
     }

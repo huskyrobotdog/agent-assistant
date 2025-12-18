@@ -305,8 +305,18 @@ async fn chat(
 async fn execute_tool_async(tool_call: &ToolCall) -> ToolResult {
     let executors = MCP_MANAGER.get_all_executors().await;
 
+    #[cfg(debug_assertions)]
+    println!(
+        "\n⚡ [工具调用] {} | executors 数量: {}",
+        tool_call.name,
+        executors.len()
+    );
+
     // 从命名空间格式中提取原始工具名（mcp.mysql.connect_db -> connect_db）
     let original_tool_name = tool_call.name.rsplit('.').next().unwrap_or(&tool_call.name);
+
+    #[cfg(debug_assertions)]
+    println!("   原始工具名: {}", original_tool_name);
 
     // 创建使用原始工具名的 ToolCall
     let original_tool_call = ToolCall {
@@ -315,21 +325,36 @@ async fn execute_tool_async(tool_call: &ToolCall) -> ToolResult {
     };
 
     // 查找能执行此工具的 executor
-    for executor in executors.values() {
+    for (name, executor) in executors.iter() {
         let tools = executor.get_tools_cached();
+        #[cfg(debug_assertions)]
+        println!("   检查 executor '{}': {} 个工具", name, tools.len());
+
         if tools.iter().any(|t| t.name == original_tool_name) {
+            #[cfg(debug_assertions)]
+            println!("   ✓ 找到匹配的 executor: {}", name);
+
             match executor.execute_async(&original_tool_call).await {
-                Ok(result) => return result,
+                Ok(result) => {
+                    #[cfg(debug_assertions)]
+                    println!("   ✓ 执行成功");
+                    return result;
+                }
                 Err(e) => {
+                    #[cfg(debug_assertions)]
+                    println!("   ✗ 执行失败: {}", e);
                     return ToolResult {
                         tool_name: tool_call.name.clone(),
                         result: format!("工具执行错误: {}", e),
                         is_error: true,
-                    }
+                    };
                 }
             }
         }
     }
+
+    #[cfg(debug_assertions)]
+    println!("   ✗ 未找到匹配的 executor");
 
     ToolResult {
         tool_name: tool_call.name.clone(),
