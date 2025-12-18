@@ -105,6 +105,7 @@ function confirmRename() {
           v-model="renameTitle"
           class="w-full"
           placeholder="请输入新名称"
+          autofocus
           @keydown.enter="confirmRename" />
       </div>
       <template #footer>
