@@ -13,7 +13,25 @@ use std::num::NonZeroU32;
 use std::path::PathBuf;
 
 // ReAct Prompt 模板（编译时嵌入）
-pub const REACT_PROMPT_TEMPLATE: &str = include_str!("../resources/prompt/agent.md");
+pub const REACT_PROMPT_TEMPLATE: &str =
+    "Answer the following questions as best you can. You have access to the following tools:
+
+{{TOOLS}}
+
+Use the following format:
+
+Question: the input question you must answer
+Thought: you should always think about what to do
+Action: the action to take, should be one of [{{TOOL_NAMES}}]
+Action Input: the input to the action
+Observation: the result of the action
+... (this Thought/Action/Action Input/Observation can be repeated zero or more times)
+Thought: I now know the final answer
+Final Answer: the final answer to the original input question
+
+Begin!
+
+Question: {{QUERY}}";
 
 // Qwen ReAct 工具描述模板
 // 参考：https://github.com/QwenLM/Qwen/blob/main/examples/react_prompt.md
