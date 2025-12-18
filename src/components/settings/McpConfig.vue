@@ -88,6 +88,14 @@ const isDarkMode = () => {
 }
 
 // 初始化编辑器
+// 更新编辑器高度
+const updateEditorHeight = () => {
+  if (!editor || !editorContainer.value) return
+  const contentHeight = Math.max(200, editor.getContentHeight())
+  editorContainer.value.style.height = `${contentHeight}px`
+  editor.layout()
+}
+
 const initEditor = () => {
   if (!editorContainer.value) return
 
@@ -104,6 +112,16 @@ const initEditor = () => {
     tabSize: 2,
     formatOnPaste: true,
     formatOnType: true,
+    scrollbar: {
+      vertical: 'hidden',
+      horizontal: 'hidden',
+      handleMouseWheel: false,
+    },
+  })
+
+  // 监听内容变化，自动调整高度
+  editor.onDidContentSizeChange(() => {
+    updateEditorHeight()
   })
 
   // 监听错误标记
@@ -114,6 +132,9 @@ const initEditor = () => {
       hasErrors.value = markers.some((m) => m.severity === monaco.MarkerSeverity.Error)
     }
   })
+
+  // 初始化高度
+  updateEditorHeight()
 }
 
 // 监听暗色模式变化
@@ -209,7 +230,7 @@ onUnmounted(() => {
 }
 
 .editor-container {
-  height: 400px;
+  min-height: 200px;
   width: 100%;
 }
 

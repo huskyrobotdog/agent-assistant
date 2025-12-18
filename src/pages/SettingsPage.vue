@@ -1,18 +1,37 @@
 <script setup>
-import Card from 'primevue/card'
+import Tabs from 'primevue/tabs'
+import TabList from 'primevue/tablist'
+import Tab from 'primevue/tab'
+import TabPanels from 'primevue/tabpanels'
+import TabPanel from 'primevue/tabpanel'
 import McpConfig from '@/components/settings/McpConfig.vue'
 </script>
 
 <template>
   <div class="max-w-6xl mx-auto flex flex-col gap-6">
-    <Card>
-      <template #title>系统设置</template>
-      <template #subtitle>应用配置与偏好管理</template>
-      <template #content>
-        <p class="text-surface-500">管理智能体、MCP 服务器和个人偏好设置。</p>
-      </template>
-    </Card>
-
-    <McpConfig />
+    <Tabs value="mcp">
+      <TabList>
+        <Tab value="general">通用设置</Tab>
+        <Tab value="mcp">MCP</Tab>
+        <Tab value="agent">智能体</Tab>
+      </TabList>
+      <TabPanels>
+        <TabPanel value="general">
+          <div class="p-4">
+            <h3 class="text-lg font-semibold mb-4">通用设置</h3>
+            <p class="text-surface-500">通用设置功能即将推出...</p>
+          </div>
+        </TabPanel>
+        <TabPanel value="mcp">
+          <McpConfig />
+        </TabPanel>
+        <TabPanel value="agent">
+          <div class="p-4">
+            <h3 class="text-lg font-semibold mb-4">智能体配置</h3>
+            <p class="text-surface-500">智能体配置功能即将推出...</p>
+          </div>
+        </TabPanel>
+      </TabPanels>
+    </Tabs>
   </div>
 </template>
