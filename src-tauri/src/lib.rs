@@ -75,9 +75,6 @@ async fn chat(
     message: String,
     _system_prompt: Option<String>,
 ) -> Result<String, String> {
-    // 获取工具列表
-    let tools = mcp::MCP_MANAGER.get_all_tools().await;
-
     let app_clone = app.clone();
 
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -85,7 +82,7 @@ async fn chat(
             let _ = app_clone.emit("chat-token", token.to_string());
         };
 
-        agent::chat(&message, &tools, Some(&callback))
+        agent::chat(&message, Some(&callback))
     })
     .await
     .map_err(|e| format!("任务执行失败: {}", e))?

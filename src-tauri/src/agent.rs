@@ -84,11 +84,13 @@ fn execute_tool(tool_call: &ToolCall) -> Result<ToolResult> {
 
 /// 使用全局 Agent 进行对话
 /// - query: 用户问题
-/// - tools: 可用工具列表（为空则不使用工具）
 /// - callback: 流式输出回调
-pub fn chat(query: &str, tools: &[McpTool], callback: Option<&dyn Fn(&str)>) -> Result<String> {
+pub fn chat(query: &str, callback: Option<&dyn Fn(&str)>) -> Result<String> {
+    // 获取工具列表
+    let tools = tauri::async_runtime::block_on(crate::mcp::MCP_MANAGER.get_all_tools());
+
     // 构建 ReAct Prompt
-    let prompt = build_react_prompt(query, tools);
+    let prompt = build_react_prompt(query, &tools);
 
     let mut guard = AGENT.lock();
     let agent = guard.as_mut().context("Agent 未初始化")?;
