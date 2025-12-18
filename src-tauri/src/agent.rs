@@ -490,11 +490,9 @@ impl CoTAgent {
     fn parse_tool_calls(&self, response: &str) -> Vec<ToolCall> {
         let mut tool_calls = Vec::new();
 
-        // 格式 1: CoT 风格 Tool/Tool Input (优先)
-        // 使用 [ \t]* 只匹配空格/制表符，不匹配换行，避免 \s* 吃掉换行导致匹配失败
-        let cot_re =
-            regex::Regex::new(r"(?s)Tool:[ \t]*(\S+)[ \t]*\nTool Input:[ \t]*(\{.*?\})").ok();
-        if let Some(re) = cot_re {
+        // 格式 1: 中文 ReAct 风格 行动：tool_name[{...}] (优先)
+        let cn_react_re = regex::Regex::new(r"行动[：:]\s*(\w+)\s*\[(\{.*?\})\]").ok();
+        if let Some(re) = cn_react_re {
             for cap in re.captures_iter(response) {
                 if let (Some(name), Some(args)) = (cap.get(1), cap.get(2)) {
                     if let Ok(arguments) = serde_json::from_str(args.as_str().trim()) {
@@ -507,7 +505,25 @@ impl CoTAgent {
             }
         }
 
-        // 格式 2: ReAct 风格 Action/Action Input (兼容旧格式)
+        // 格式 2: CoT 风格 Tool/Tool Input
+        if tool_calls.is_empty() {
+            let cot_re =
+                regex::Regex::new(r"(?s)Tool:[ \t]*(\S+)[ \t]*\nTool Input:[ \t]*(\{.*?\})").ok();
+            if let Some(re) = cot_re {
+                for cap in re.captures_iter(response) {
+                    if let (Some(name), Some(args)) = (cap.get(1), cap.get(2)) {
+                        if let Ok(arguments) = serde_json::from_str(args.as_str().trim()) {
+                            tool_calls.push(ToolCall {
+                                name: name.as_str().trim().to_string(),
+                                arguments,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // 格式 3: ReAct 风格 Action/Action Input (兼容旧格式)
         if tool_calls.is_empty() {
             let react_re =
                 regex::Regex::new(r"(?s)Action:[ \t]*(\S+)[ \t]*\nAction Input:[ \t]*(\{.*?\})")
