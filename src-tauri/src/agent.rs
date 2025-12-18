@@ -91,7 +91,7 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             model_path: PathBuf::from("models/Qwen3-4B-Thinking-2507-UD-IQ1_M.gguf"),
-            n_ctx: 8192,
+            n_ctx: 32768,
             n_threads: 4,
             n_gpu_layers: 99,
             temperature: 0.6,
