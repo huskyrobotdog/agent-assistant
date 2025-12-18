@@ -9,7 +9,6 @@ use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaModel, Special};
 use llama_cpp_2::sampling::LlamaSampler;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
-use regex::Regex;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 
@@ -67,14 +66,52 @@ pub fn chat_with_tools(
     agent.chat(user_input, system_prompt, callback, tool_executor)
 }
 
-/// 解析工具调用（ReAct 格式：行动：工具名[{参数}]）
+/// 解析工具调用（Qwen ReAct 格式：Action: xxx\nAction Input: {...}）
+/// 参考：https://github.com/QwenLM/Qwen/blob/main/examples/react_prompt.md
 pub fn parse_tool_call(response: &str) -> Option<ToolCall> {
-    // 匹配格式：行动：工具名[{参数}] 或 Action: tool_name[{params}]
-    let re = Regex::new(r"(?:行动|Action)[\s：:]+([\w.]+)\s*\[([\s\S]*?)\]").ok()?;
+    // 查找 Action 和 Action Input 的位置
+    // 注意：需要处理开头没有换行的情况
+    let (i, action_prefix_len) = response
+        .rfind("\nAction:")
+        .map(|pos| (pos, "\nAction:".len()))
+        .or_else(|| {
+            if response.starts_with("Action:") {
+                Some((0, "Action:".len()))
+            } else {
+                None
+            }
+        })?;
 
-    let captures = re.captures(response)?;
-    let tool_name = captures.get(1)?.as_str().to_string();
-    let args_str = captures.get(2)?.as_str().trim();
+    let (j, input_prefix_len) = response
+        .rfind("\nAction Input:")
+        .map(|pos| (pos, "\nAction Input:".len()))
+        .or_else(|| {
+            if response.starts_with("Action Input:") {
+                Some((0, "Action Input:".len()))
+            } else {
+                None
+            }
+        })?;
+
+    // Action 必须在 Action Input 之前
+    if i >= j {
+        return None;
+    }
+
+    // 确定 Action Input 的结束位置
+    // 如果没有 Observation 或 Observation 在 Action Input 之前，则使用文本末尾
+    let k = response
+        .rfind("\nObservation:")
+        .filter(|&pos| pos > j)
+        .unwrap_or(response.len());
+
+    // 提取 Action 名称
+    let action_start = i + action_prefix_len;
+    let tool_name = response[action_start..j].trim().to_string();
+
+    // 提取 Action Input（JSON 参数）
+    let input_start = j + input_prefix_len;
+    let args_str = response[input_start..k].trim();
 
     // 解析 JSON 参数
     let arguments: serde_json::Value = if args_str.is_empty() {
@@ -177,18 +214,21 @@ impl Agent {
                             #[cfg(debug_assertions)]
                             println!("[Agent] 工具结果: {}", result.result);
 
-                            // 添加观察结果
-                            let observation = format!("\n观察：{}", result.result);
+                            // 添加观察结果（Qwen ReAct 格式）
+                            let observation = format!("\nObservation: {}", result.result);
                             if let Some(cb) = callback {
                                 cb(&observation);
                             }
-                            messages.push(("user".to_string(), format!("观察：{}", result.result)));
+                            messages.push((
+                                "user".to_string(),
+                                format!("Observation: {}", result.result),
+                            ));
                         }
                         Err(e) => {
                             #[cfg(debug_assertions)]
                             println!("[Agent] 工具执行失败: {}", e);
 
-                            let error_msg = format!("观察：工具执行失败 - {}", e);
+                            let error_msg = format!("Observation: Tool execution failed - {}", e);
                             if let Some(cb) = callback {
                                 cb(&format!("\n{}", error_msg));
                             }
@@ -278,6 +318,17 @@ impl Agent {
             let _ = decoder.decode_to_string(&token_bytes, &mut token_str, false);
 
             output.push_str(&token_str);
+
+            // 检测 stop word: "Observation" 或 "Observation:"
+            if output.ends_with("\nObservation:") || output.ends_with("\nObservation") {
+                // 移除 stop word
+                if output.ends_with("\nObservation:") {
+                    output.truncate(output.len() - "\nObservation:".len());
+                } else {
+                    output.truncate(output.len() - "\nObservation".len());
+                }
+                break;
+            }
 
             // 调试打印流式输出
             #[cfg(debug_assertions)]

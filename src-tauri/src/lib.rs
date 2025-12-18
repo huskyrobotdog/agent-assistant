@@ -88,34 +88,78 @@ async fn chat(
             let template = std::fs::read_to_string(&prompt_path)
                 .map_err(|e| format!("读取 prompt 文件失败: {}", e))?;
 
-            // 构建工具 prompt
+            // 构建工具 prompt（Qwen ReAct 格式）
             let tools = mcp::MCP_MANAGER.get_all_tools().await;
-            let tools_prompt = if tools.is_empty() {
-                String::new()
+            let (tools_prompt, tool_names) = if tools.is_empty() {
+                (String::new(), String::new())
             } else {
-                let mut p = String::from("# 可用工具\n\n");
+                let mut descs = Vec::new();
+                let mut names = Vec::new();
                 for tool in tools {
-                    p.push_str(&format!("## {}\n", tool.name));
-                    p.push_str(&format!("{}\n\n", tool.description));
-                    p.push_str(&format!("参数: {}\n\n", tool.input_schema));
+                    // Qwen ReAct 工具描述格式
+                    let desc = format!(
+                        "{}: Call this tool to interact with the {} API. What is the {} API useful for? {} Parameters: {} Format the arguments as a JSON object.",
+                        tool.name,
+                        tool.name,
+                        tool.name,
+                        tool.description,
+                        tool.input_schema
+                    );
+                    descs.push(desc);
+                    names.push(tool.name);
                 }
-                p
+                (descs.join("\n\n"), names.join(","))
             };
 
             // 替换占位符
             template
                 .replace("{{TOOLS}}", &tools_prompt)
-                .replace("{{CONTEXT}}", "")
+                .replace("{{TOOL_NAMES}}", &tool_names)
+                .replace("{{QUERY}}", &message)
         }
     };
 
     let app_clone = app.clone();
 
+    // 获取所有 MCP 执行器用于工具调用
+    let executors = mcp::MCP_MANAGER.get_all_executors().await;
+
     let result = tauri::async_runtime::spawn_blocking(move || {
         let callback = |token: &str| {
             let _ = app_clone.emit("chat-token", token.to_string());
         };
-        agent::chat(&message, Some(&final_prompt), Some(&callback))
+
+        // 工具执行器：解析工具名并调用对应的 MCP 服务
+        let tool_executor =
+            |tool_call: &crate::tool::ToolCall| -> anyhow::Result<crate::tool::ToolResult> {
+                // 解析工具名：格式为 mcp.server_name.tool_name
+                let parts: Vec<&str> = tool_call.name.splitn(3, '.').collect();
+                if parts.len() != 3 || parts[0] != "mcp" {
+                    return Err(anyhow::anyhow!("无效的工具名格式: {}", tool_call.name));
+                }
+                let server_name = parts[1];
+                let tool_name = parts[2];
+
+                // 查找对应的执行器
+                let executor = executors
+                    .get(server_name)
+                    .ok_or_else(|| anyhow::anyhow!("未找到 MCP 服务器: {}", server_name))?;
+
+                // 在当前线程创建一个新的 tokio runtime 来执行异步调用
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?;
+
+                let local_tool_call = crate::tool::ToolCall {
+                    name: tool_name.to_string(),
+                    arguments: tool_call.arguments.clone(),
+                };
+
+                rt.block_on(executor.execute_async(&local_tool_call))
+            };
+
+        // Qwen ReAct: 完整 prompt 作为 user 消息，不使用 system prompt
+        agent::chat_with_tools(&final_prompt, None, Some(&callback), Some(&tool_executor))
     })
     .await
     .map_err(|e| format!("任务执行失败: {}", e))?
