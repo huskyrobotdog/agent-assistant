@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// ReAct 系统提示词模板
 const REACT_PROMPT: &str = include_str!("../resources/prompt/agent.md");
@@ -131,6 +131,8 @@ pub struct CoTAgent {
     state: RwLock<AgentState>,
     /// 自定义上下文信息（如 MCP 环境变量配置）
     context: RwLock<String>,
+    /// 缓存的 token 数量（用于增量处理）
+    cached_token_count: Mutex<usize>,
 }
 
 impl CoTAgent {
@@ -156,6 +158,7 @@ impl CoTAgent {
             tool_executors: RwLock::new(HashMap::new()),
             state: RwLock::new(AgentState::Idle),
             context: RwLock::new(String::new()),
+            cached_token_count: Mutex::new(0),
         })
     }
 
@@ -839,6 +842,8 @@ impl CoTAgent {
     pub fn clear_history(&self) {
         let mut messages = self.messages.write();
         messages.retain(|m| m.role == Role::System);
+        // 重置 token 缓存
+        *self.cached_token_count.lock().unwrap() = 0;
     }
 
     /// 获取当前状态
