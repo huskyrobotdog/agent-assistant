@@ -17,7 +17,7 @@ async fn init_agent_cmd(app: tauri::AppHandle) -> Result<String, String> {
         .resolve("resources/model/agent", BaseDirectory::Resource)
         .map_err(|e| format!("获取模型路径失败: {}", e))?;
 
-    tauri::async_runtime::spawn_blocking(move || agent::init_agent(model_path))
+    tauri::async_runtime::spawn_blocking(move || agent::init(model_path))
         .await
         .map_err(|e| format!("任务执行失败: {}", e))?
         .map_err(|e| e.to_string())?;
@@ -94,15 +94,7 @@ pub fn run() {
                 .add_migrations("sqlite:datas.db", get_migrations())
                 .build(),
         )
-        .setup(|app| {
-            let app_data = app.path().app_data_dir()?;
-            let models_dir = app_data.join("models");
-            std::fs::create_dir_all(&models_dir)?;
-            #[cfg(debug_assertions)]
-            println!("模型目录: {:?}", models_dir);
-
-            Ok(())
-        })
+        // .setup(|app| Ok(()))
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![greet, init_agent_cmd, chat_cmd,])
         .run(tauri::generate_context!())

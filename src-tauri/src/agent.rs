@@ -36,7 +36,7 @@ pub struct Agent {
 unsafe impl Send for Agent {}
 
 /// 初始化全局 Agent（只调用一次）
-pub fn init_agent(model_path: PathBuf) -> Result<()> {
+pub fn init(model_path: PathBuf) -> Result<()> {
     let agent = Agent::new(model_path)?;
     *AGENT.lock() = Some(agent);
     Ok(())
@@ -91,11 +91,22 @@ impl Agent {
         system_prompt: Option<&str>,
         callback: Option<&dyn Fn(&str)>,
     ) -> Result<String> {
+        #[cfg(debug_assertions)]
+        if let Some(sp) = system_prompt {
+            println!("[Agent] 系统提示词: {}", sp);
+        }
+        #[cfg(debug_assertions)]
+        println!("[Agent] 用户消息: {}", user_input);
+
         // 构建 prompt
         let prompt = self.build_prompt(user_input, system_prompt)?;
 
         // 生成回复
+        #[cfg(debug_assertions)]
+        print!("[Agent] 响应: ");
         let response = self.generate(&prompt, callback)?;
+        #[cfg(debug_assertions)]
+        println!();
 
         // 清空 kvcache（为下次对话准备）
         self.clear_kv_cache();
@@ -178,6 +189,14 @@ impl Agent {
             let _ = decoder.decode_to_string(&token_bytes, &mut token_str, false);
 
             output.push_str(&token_str);
+
+            // 调试打印流式输出
+            #[cfg(debug_assertions)]
+            {
+                use std::io::Write;
+                print!("{}", token_str);
+                let _ = std::io::stdout().flush();
+            }
 
             // 回调
             if let Some(cb) = callback {

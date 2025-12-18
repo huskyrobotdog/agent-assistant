@@ -94,7 +94,7 @@ async function handleSend(content) {
   scrollToBottom()
 
   try {
-    await invoke('chat', { message: content })
+    await invoke('chat_cmd', { message: content })
   } catch (error) {
     // 更新消息为错误信息
     const msg = messages.value.find((m) => m.id === aiMessageId)
@@ -174,13 +174,9 @@ onMounted(async () => {
   })
 })
 
-// 更新上下文信息
+// 更新上下文信息（暂未实现后端命令）
 async function updateContextInfo() {
-  try {
-    contextInfo.value = await invoke('get_context_info')
-  } catch {
-    // Agent 未初始化时忽略错误
-  }
+  // TODO: 后端需要实现 get_context_info 命令
 }
 
 onUnmounted(() => {

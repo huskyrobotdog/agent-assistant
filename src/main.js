@@ -9,7 +9,6 @@ import '@/style.css';
 import App from '@/App.vue';
 import router from '@/router.js';
 import { invoke } from '@tauri-apps/api/core';
-import { appDataDir, join } from '@tauri-apps/api/path';
 import { initDb } from '@/utils/db.js';
 
 const app = createApp(App);
@@ -48,14 +47,7 @@ const loadApp = () => {
 
 const startApp = async () => {
     await initDb();
-    const appData = await appDataDir();
-    // const modelPath = await join(appData, 'models', 'Qwen3-4B-Thinking-2507-Claude-4.5-Opus-High-Reasoning-Distill.i1-Q4_K_M.gguf');
-    // const modelPath = await join(appData, 'models', 'Qwen3-1.7B-Q4_K_M.gguf');
-    // const modelPath = await join(appData, 'models', 'Qwen3-0.6B-Q4_K_M.gguf');
-    // const modelPath = await join(appData, 'models', 'Qwen3-0.6B-Q8_0.gguf');
-    const modelPath = await join(appData, 'models', 'Qwen3-4B-Q4_K_M.gguf');
-    console.log(modelPath)
-    await invoke('init_agent', { modelPath });
+    await invoke('init_agent_cmd');
     loadApp()
 }
 
