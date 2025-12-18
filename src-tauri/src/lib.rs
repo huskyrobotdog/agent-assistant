@@ -16,7 +16,6 @@ use tokio::sync::Mutex as TokioMutex;
 /// 全局 Agent 状态（Tauri 管理）
 struct TauriAgentState {
     agent: RwLock<Option<Arc<CoTAgent>>>,
-    mcp_manager: Arc<McpManager>,
     mcp_executors: TokioMutex<HashMap<String, Arc<McpToolExecutorAsync>>>,
 }
 
@@ -24,7 +23,6 @@ impl Default for TauriAgentState {
     fn default() -> Self {
         Self {
             agent: RwLock::new(None),
-            mcp_manager: Arc::new(McpManager::new()),
             mcp_executors: TokioMutex::new(HashMap::new()),
         }
     }
@@ -140,7 +138,7 @@ async fn load_mcp_servers_async(
             }
         }
 
-        match state.mcp_manager.add_server(&name, mcp_config).await {
+        match MCP_MANAGER.add_server(&name, mcp_config).await {
             Ok(client) => {
                 let executor = Arc::new(McpToolExecutorAsync::new(client));
                 executor.cache_tools().await;
@@ -427,8 +425,7 @@ async fn add_mcp_server(
         timeout_secs: None,
     };
 
-    let client = state
-        .mcp_manager
+    let client = MCP_MANAGER
         .add_server(&name, config)
         .await
         .map_err(|e| e.to_string())?;
@@ -458,8 +455,7 @@ async fn remove_mcp_server(
     state: tauri::State<'_, TauriAgentState>,
     name: String,
 ) -> Result<String, String> {
-    state
-        .mcp_manager
+    MCP_MANAGER
         .remove_server(&name)
         .await
         .map_err(|e| e.to_string())?;
