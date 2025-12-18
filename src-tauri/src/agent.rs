@@ -13,23 +13,22 @@ use std::num::NonZeroU32;
 use std::path::PathBuf;
 
 // ReAct Prompt 模板（编译时嵌入）
-pub const REACT_PROMPT_TEMPLATE: &str =
-    "Answer the following questions as best you can. You have access to the following tools:
+pub const REACT_PROMPT_TEMPLATE: &str = "请尽可能回答以下问题。你可以使用以下工具：
 
 {{TOOLS}}
 
-Use the following format:
+请使用以下格式：
 
-Question: the input question you must answer
-Thought: you should always think about what to do
-Action: the action to take, should be one of [{{TOOL_NAMES}}]
-Action Input: the input to the action
-Observation: the result of the action
-... (this Thought/Action/Action Input/Observation can be repeated zero or more times)
-Thought: I now know the final answer
-Final Answer: the final answer to the original input question
+Question: 你需要回答的问题
+Thought: 你需要思考下一步该做什么
+Action: 要执行的动作，必须是 [{{TOOL_NAMES}}] 中的一个
+Action Input: 动作的输入参数
+Observation: 动作执行的结果
+...（Thought/Action/Action Input/Observation 可以重复多次）
+Thought: 我现在知道最终答案了
+Final Answer: 原始问题的最终答案
 
-Begin!
+开始！
 
 Question: {{QUERY}}";
 
@@ -38,7 +37,7 @@ Question: {{QUERY}}";
 fn format_tool_desc(tool: &McpTool) -> String {
     let params_str = serde_json::to_string_pretty(&tool.input_schema).unwrap_or_default();
     format!(
-        "{name}: Call this tool to interact with the {name} API. What is the {name} API useful for? {desc}\nParameters:\n```json\n{params}\n```\nFormat the arguments as a JSON object.",
+        "{name}: 调用此工具与 {name} API 进行交互。{name} API 有什么用？{desc}\n参数：\n```json\n{params}\n```\n请将参数格式化为 JSON 对象。",
         name = tool.name,
         desc = tool.description,
         params = params_str
@@ -51,8 +50,7 @@ fn build_server_context(configs: &[(String, McpClientConfig)]) -> String {
         return String::new();
     }
 
-    let mut result =
-        String::from("\n\nNote: The following MCP servers are already configured and connected:\n");
+    let mut result = String::from("\n\n注意：以下 MCP 服务器已配置并连接：\n");
     for (name, config) in configs {
         result.push_str(&format!("- Server '{}':\n", name));
         result.push_str(&format!(
@@ -67,9 +65,7 @@ fn build_server_context(configs: &[(String, McpClientConfig)]) -> String {
             }
         }
     }
-    result.push_str(
-        "These environment variables are pre-configured, you don't need to provide them again.\n",
-    );
+    result.push_str("这些环境变量已预先配置，你无需再次提供。\n");
     result
 }
 
@@ -285,9 +281,9 @@ impl Agent {
         }
 
         let prompt = format!(
-            "Summarize the following conversation history concisely, keeping key information (tool calls, results, important data):\n\n\
+            "请简洁地总结以下对话历史，保留关键信息（工具调用、结果、重要数据）：\n\n\
             {}\n\n\
-            Summary:",
+            总结：",
             history_text
         );
 
@@ -366,7 +362,7 @@ impl Agent {
                         #[cfg(debug_assertions)]
                         println!("[Agent] 工具执行失败: {}", e);
 
-                        let error_msg = format!("Observation: Tool execution failed - {}", e);
+                        let error_msg = format!("Observation: 工具执行失败 - {}", e);
                         if let Some(cb) = callback {
                             cb(&format!("\n{}", error_msg));
                         }
@@ -382,10 +378,8 @@ impl Agent {
                         let initial_prompt = messages[0].clone();
                         messages.clear();
                         messages.push(initial_prompt);
-                        messages.push((
-                            "user".to_string(),
-                            format!("Previous steps summary:\n{}", summary),
-                        ));
+                        messages
+                            .push(("user".to_string(), format!("之前步骤的总结：\n{}", summary)));
                     }
                 }
             } else {
