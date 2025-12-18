@@ -21,6 +21,20 @@ async fn init_agent(app: tauri::AppHandle) -> Result<String, String> {
     Ok("Agent 初始化成功".to_string())
 }
 
+/// 初始化 MCP
+#[tauri::command]
+async fn init_mcp(app: tauri::AppHandle) -> Result<String, String> {
+    let db_path = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("获取数据目录失败: {}", e))?
+        .join("datas.db");
+
+    mcp::init(db_path).await.map_err(|e| e.to_string())?;
+
+    Ok("MCP 初始化成功".to_string())
+}
+
 /// 发送消息给 Agent（流式）
 #[tauri::command]
 async fn chat(
@@ -55,7 +69,7 @@ pub fn run() {
         )
         // .setup(|app| Ok(()))
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![init_agent, chat,])
+        .invoke_handler(tauri::generate_handler![init_agent, init_mcp, chat,])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

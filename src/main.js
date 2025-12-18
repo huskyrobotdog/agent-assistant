@@ -48,6 +48,7 @@ const loadApp = () => {
 const startApp = async () => {
     await initDb();
     await invoke('init_agent');
+    await invoke('init_mcp');
     loadApp()
 }
 

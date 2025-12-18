@@ -10,12 +10,70 @@ use rmcp::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::Mutex as TokioMutex;
 
 /// 全局 MCP 管理器单例
 pub static MCP_MANAGER: Lazy<McpManager> = Lazy::new(McpManager::new);
+
+/// MCP 配置结构（与前端配置格式一致）
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct McpConfig {
+    #[serde(default, alias = "mcpServers")]
+    pub servers: HashMap<String, McpClientConfig>,
+}
+
+/// 从数据库初始化 MCP
+pub async fn init(db_path: PathBuf) -> Result<()> {
+    use rusqlite::Connection;
+
+    // 查询配置
+    let config_json = tokio::task::spawn_blocking(move || -> Result<String> {
+        let conn = Connection::open(&db_path).context("打开数据库失败")?;
+        let result: Result<String, rusqlite::Error> =
+            conn.query_row("SELECT value FROM config WHERE key = 'mcp'", [], |row| {
+                row.get(0)
+            });
+        match result {
+            Ok(value) => Ok(value),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok("{}".to_string()),
+            Err(e) => Err(anyhow::anyhow!("查询配置失败: {}", e)),
+        }
+    })
+    .await
+    .context("任务执行失败")??;
+
+    #[cfg(debug_assertions)]
+    println!("[MCP] 配置: {}", config_json);
+
+    // 解析配置
+    let config: McpConfig =
+        serde_json::from_str(&config_json).unwrap_or_else(|_| McpConfig::default());
+
+    #[cfg(debug_assertions)]
+    println!("[MCP] 加载配置: {:?}", config);
+
+    // 初始化所有服务器
+    for (name, server_config) in config.servers {
+        #[cfg(debug_assertions)]
+        println!("[MCP] 正在连接服务器: {}", name);
+
+        match MCP_MANAGER.add_server(&name, server_config).await {
+            Ok(_) => {
+                #[cfg(debug_assertions)]
+                println!("[MCP] 服务器 {} 连接成功", name);
+            }
+            Err(e) => {
+                #[cfg(debug_assertions)]
+                println!("[MCP] 服务器 {} 连接失败: {}", name, e);
+            }
+        }
+    }
+
+    Ok(())
+}
 
 /// MCP 客户端配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
