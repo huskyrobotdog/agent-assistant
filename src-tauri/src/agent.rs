@@ -1,3 +1,4 @@
+use crate::tool::{ToolCall, ToolResult};
 use anyhow::{Context, Result};
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::context::LlamaContext;
@@ -8,6 +9,7 @@ use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaModel, Special};
 use llama_cpp_2::sampling::LlamaSampler;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
+use regex::Regex;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 
@@ -50,7 +52,41 @@ pub fn chat(
 ) -> Result<String> {
     let mut guard = AGENT.lock();
     let agent = guard.as_mut().context("Agent 未初始化")?;
-    agent.chat(user_input, system_prompt, callback)
+    agent.chat(user_input, system_prompt, callback, None)
+}
+
+/// 使用全局 Agent 进行对话（带工具执行器）
+pub fn chat_with_tools(
+    user_input: &str,
+    system_prompt: Option<&str>,
+    callback: Option<&dyn Fn(&str)>,
+    tool_executor: Option<&dyn Fn(&ToolCall) -> Result<ToolResult>>,
+) -> Result<String> {
+    let mut guard = AGENT.lock();
+    let agent = guard.as_mut().context("Agent 未初始化")?;
+    agent.chat(user_input, system_prompt, callback, tool_executor)
+}
+
+/// 解析工具调用（ReAct 格式：行动：工具名[{参数}]）
+pub fn parse_tool_call(response: &str) -> Option<ToolCall> {
+    // 匹配格式：行动：工具名[{参数}] 或 Action: tool_name[{params}]
+    let re = Regex::new(r"(?:行动|Action)[\s：:]+([\w.]+)\s*\[([\s\S]*?)\]").ok()?;
+
+    let captures = re.captures(response)?;
+    let tool_name = captures.get(1)?.as_str().to_string();
+    let args_str = captures.get(2)?.as_str().trim();
+
+    // 解析 JSON 参数
+    let arguments: serde_json::Value = if args_str.is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str(args_str).unwrap_or_else(|_| serde_json::json!({}))
+    };
+
+    Some(ToolCall {
+        name: tool_name,
+        arguments,
+    })
 }
 
 impl Agent {
@@ -84,12 +120,13 @@ impl Agent {
         Ok(Self { model, ctx })
     }
 
-    /// 对话函数 - 每次对话完成后自动清空 kvcache
+    /// 对话函数 - 支持工具调用循环
     pub fn chat(
         &mut self,
         user_input: &str,
         system_prompt: Option<&str>,
         callback: Option<&dyn Fn(&str)>,
+        tool_executor: Option<&dyn Fn(&ToolCall) -> Result<ToolResult>>,
     ) -> Result<String> {
         #[cfg(debug_assertions)]
         if let Some(sp) = system_prompt {
@@ -98,44 +135,96 @@ impl Agent {
         #[cfg(debug_assertions)]
         println!("[Agent] 用户消息: {}", user_input);
 
-        // 构建 prompt
-        let prompt = self.build_prompt(user_input, system_prompt)?;
+        // 构建消息历史
+        let mut messages: Vec<(String, String)> = Vec::new();
+        if let Some(sp) = system_prompt {
+            messages.push(("system".to_string(), sp.to_string()));
+        }
+        messages.push(("user".to_string(), user_input.to_string()));
 
-        // 生成回复
-        #[cfg(debug_assertions)]
-        print!("[Agent] 响应: ");
-        let response = self.generate(&prompt, callback)?;
-        #[cfg(debug_assertions)]
-        println!();
+        let mut final_response = String::new();
+        const MAX_TOOL_CALLS: usize = 10; // 防止无限循环
 
-        // 清空 kvcache（为下次对话准备）
-        self.clear_kv_cache();
+        for iteration in 0..MAX_TOOL_CALLS {
+            // 构建 prompt
+            let prompt = self.build_prompt_from_messages(&messages)?;
 
-        Ok(response)
+            // 生成回复
+            #[cfg(debug_assertions)]
+            print!("[Agent] 响应 #{}: ", iteration + 1);
+            let response = self.generate(&prompt, callback)?;
+            #[cfg(debug_assertions)]
+            println!();
+
+            // 清空 kvcache
+            self.clear_kv_cache();
+
+            // 检测工具调用
+            if let Some(tool_call) = parse_tool_call(&response) {
+                #[cfg(debug_assertions)]
+                println!(
+                    "[Agent] 检测到工具调用: {} - {:?}",
+                    tool_call.name, tool_call.arguments
+                );
+
+                // 添加 assistant 消息
+                messages.push(("assistant".to_string(), response.clone()));
+
+                // 执行工具
+                if let Some(executor) = tool_executor {
+                    match executor(&tool_call) {
+                        Ok(result) => {
+                            #[cfg(debug_assertions)]
+                            println!("[Agent] 工具结果: {}", result.result);
+
+                            // 添加观察结果
+                            let observation = format!("\n观察：{}", result.result);
+                            if let Some(cb) = callback {
+                                cb(&observation);
+                            }
+                            messages.push(("user".to_string(), format!("观察：{}", result.result)));
+                        }
+                        Err(e) => {
+                            #[cfg(debug_assertions)]
+                            println!("[Agent] 工具执行失败: {}", e);
+
+                            let error_msg = format!("观察：工具执行失败 - {}", e);
+                            if let Some(cb) = callback {
+                                cb(&format!("\n{}", error_msg));
+                            }
+                            messages.push(("user".to_string(), error_msg));
+                        }
+                    }
+                } else {
+                    // 没有工具执行器，返回当前响应
+                    final_response = response;
+                    break;
+                }
+            } else {
+                // 没有工具调用，返回最终响应
+                final_response = response;
+                break;
+            }
+        }
+
+        Ok(final_response)
     }
 
-    /// 构建对话 prompt
-    fn build_prompt(&self, user_input: &str, system_prompt: Option<&str>) -> Result<String> {
+    /// 从消息历史构建 prompt
+    fn build_prompt_from_messages(&self, messages: &[(String, String)]) -> Result<String> {
         let template = self
             .model
             .chat_template(None)
             .context("获取 chat template 失败")?;
 
-        let mut messages = Vec::new();
-
-        // 添加系统提示词
-        if let Some(sp) = system_prompt {
-            messages.push(LlamaChatMessage::new("system".to_string(), sp.to_string())?);
-        }
-
-        // 添加用户消息
-        messages.push(LlamaChatMessage::new(
-            "user".to_string(),
-            user_input.to_string(),
-        )?);
+        let chat_messages: Vec<LlamaChatMessage> = messages
+            .iter()
+            .map(|(role, content)| LlamaChatMessage::new(role.clone(), content.clone()))
+            .collect::<Result<Vec<_>, _>>()
+            .context("构建消息失败")?;
 
         self.model
-            .apply_chat_template(&template, &messages, true)
+            .apply_chat_template(&template, &chat_messages, true)
             .context("应用 chat template 失败")
     }
 

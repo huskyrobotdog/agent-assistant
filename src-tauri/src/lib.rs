@@ -1,6 +1,11 @@
 mod agent;
+mod db;
+mod mcp;
+mod tool;
 
 pub use agent::*;
+pub use mcp::*;
+pub use tool::*;
 
 use tauri::{path::BaseDirectory, Emitter, Manager};
 
@@ -49,49 +54,12 @@ async fn chat_cmd(
     Ok(result)
 }
 
-/// 获取数据库迁移配置
-fn get_migrations() -> Vec<tauri_plugin_sql::Migration> {
-    use tauri_plugin_sql::{Migration, MigrationKind};
-
-    vec![
-        Migration {
-            version: 1,
-            description: "create_agents_table",
-            sql: r#"
-                CREATE TABLE IF NOT EXISTS agents (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL UNIQUE,
-                    system_prompt TEXT DEFAULT '',
-                    allow_tools INTEGER DEFAULT 1,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            "#,
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 2,
-            description: "create_config_table",
-            sql: r#"
-                CREATE TABLE IF NOT EXISTS config (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    key TEXT NOT NULL UNIQUE,
-                    value TEXT DEFAULT '{}',
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            "#,
-            kind: MigrationKind::Up,
-        },
-    ]
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(
             tauri_plugin_sql::Builder::default()
-                .add_migrations("sqlite:datas.db", get_migrations())
+                .add_migrations("sqlite:datas.db", db::get_migrations())
                 .build(),
         )
         // .setup(|app| Ok(()))
