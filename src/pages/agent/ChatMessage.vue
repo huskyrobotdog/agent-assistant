@@ -63,106 +63,133 @@ function cleanContent(text) {
   return cleaned.trim()
 }
 
-// 解析内容，提取 ReAct 格式（Thought/Action/Action Input/Observation）
+// 解析内容，按顺序提取 <think> 块和 ReAct 格式
 const parsedContent = computed(() => {
   const content = props.message.content || ''
   const steps = []
-
-  // 先清理 think 标签
-  const cleanedContent = cleanContent(content)
-
-  // 检测是否是 ReAct 格式
-  const isReactFormat = /^(Thought:|Action:|Action Input:|Observation:|Final Answer:)/m.test(cleanedContent)
-
-  // 如果不是 ReAct 格式，直接返回清理后的内容作为 response
-  if (!isReactFormat) {
-    return {
-      steps: [],
-      response: cleanedContent,
-      isStreaming: false,
-      hasSummary: true,
-    }
-  }
-
-  // 按行解析 ReAct 格式
-  const lines = cleanedContent.split('\n')
-  let currentType = null
-  let currentContent = []
   let finalAnswer = ''
-  // 工具调用临时存储
-  let currentToolCall = null
 
-  function saveCurrentStep() {
-    if (currentType === 'thought' && currentContent.length > 0) {
-      const text = currentContent.join('\n').trim()
-      if (text) {
-        steps.push({ type: 'thought', content: text })
-      }
+  // 分段解析：按 <think> 块和普通内容交替处理
+  const segments = []
+  let remaining = content
+  const thinkRegex = /<think>([\s\S]*?)<\/think>/g
+  let lastIndex = 0
+  let match
+
+  while ((match = thinkRegex.exec(content)) !== null) {
+    // 添加 think 块之前的普通内容
+    if (match.index > lastIndex) {
+      segments.push({ type: 'text', content: content.substring(lastIndex, match.index) })
     }
-    currentContent = []
+    // 添加 think 块
+    segments.push({ type: 'think', content: match[1].trim() })
+    lastIndex = match.index + match[0].length
+  }
+  // 添加最后的普通内容
+  if (lastIndex < content.length) {
+    segments.push({ type: 'text', content: content.substring(lastIndex) })
   }
 
-  function saveToolCall() {
-    if (currentToolCall) {
-      steps.push({ ...currentToolCall })
-      currentToolCall = null
-    }
-  }
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-
-    if (line.startsWith('Thought:')) {
-      saveCurrentStep()
-      saveToolCall()
-      currentType = 'thought'
-      currentContent = [line.substring(8).trim()]
-    } else if (line.startsWith('Action:')) {
-      saveCurrentStep()
-      saveToolCall()
-      currentType = 'action'
-      currentToolCall = {
-        type: 'tool_call',
-        actionName: line.substring(7).trim(),
-        actionInput: '',
-        observation: '',
+  // 检查未闭合的 <think> 块
+  const lastOpenIdx = content.lastIndexOf('<think>')
+  const lastCloseIdx = content.lastIndexOf('</think>')
+  if (lastOpenIdx > lastCloseIdx) {
+    // 移除之前可能添加的不完整内容
+    const unclosedContent = content.substring(lastOpenIdx + 7).trim()
+    if (unclosedContent) {
+      // 找到并更新最后一个 text segment
+      const lastTextIdx = segments.findLastIndex((s) => s.type === 'text')
+      if (lastTextIdx >= 0) {
+        segments[lastTextIdx].content = segments[lastTextIdx].content.replace(/<think>[\s\S]*$/, '')
       }
-    } else if (line.startsWith('Action Input:')) {
-      if (currentToolCall) {
-        currentToolCall.actionInput = line.substring(13).trim()
-      }
-    } else if (line.startsWith('Observation:') || line.startsWith('Observ')) {
-      if (currentToolCall) {
-        const text = line.startsWith('Observation:') ? line.substring(12).trim() : line.substring(6).trim()
-        currentToolCall.observation = text
-      }
-      currentType = 'observation'
-    } else if (line.startsWith('Final Answer:')) {
-      saveCurrentStep()
-      saveToolCall()
-      currentType = null
-      finalAnswer = line.substring(13).trim()
-      for (let j = i + 1; j < lines.length; j++) {
-        finalAnswer += '\n' + lines[j]
-      }
-      finalAnswer = finalAnswer.trim()
-      break
-    } else if (currentType === 'thought') {
-      currentContent.push(line)
-    } else if (currentType === 'observation' && currentToolCall) {
-      currentToolCall.observation += '\n' + line
-    } else if (currentToolCall && !currentToolCall.observation) {
-      // 多行 Action Input
-      currentToolCall.actionInput += '\n' + line
+      segments.push({ type: 'think', content: unclosedContent + ' ...' })
     }
   }
 
-  // 保存最后的内容
-  saveCurrentStep()
-  saveToolCall()
+  // 解析每个段落
+  for (const segment of segments) {
+    if (segment.type === 'think' && segment.content) {
+      steps.push({ type: 'thinking', content: segment.content })
+    } else if (segment.type === 'text') {
+      // 解析 ReAct 格式
+      const text = segment.content.trim()
+      if (!text) continue
+
+      const lines = text.split('\n')
+      let currentType = null
+      let currentContent = []
+      let currentToolCall = null
+
+      function saveCurrentStep() {
+        if (currentType === 'thought' && currentContent.length > 0) {
+          const t = currentContent.join('\n').trim()
+          if (t) steps.push({ type: 'thought', content: t })
+        }
+        currentContent = []
+      }
+
+      function saveToolCall() {
+        if (currentToolCall) {
+          steps.push({ ...currentToolCall })
+          currentToolCall = null
+        }
+      }
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]
+
+        if (line.startsWith('Thought:')) {
+          saveCurrentStep()
+          saveToolCall()
+          currentType = 'thought'
+          currentContent = [line.substring(8).trim()]
+        } else if (line.startsWith('Action:')) {
+          saveCurrentStep()
+          saveToolCall()
+          currentType = 'action'
+          currentToolCall = {
+            type: 'tool_call',
+            actionName: line.substring(7).trim(),
+            actionInput: '',
+            observation: '',
+          }
+        } else if (line.startsWith('Action Input:')) {
+          if (currentToolCall) {
+            currentToolCall.actionInput = line.substring(13).trim()
+          }
+        } else if (line.startsWith('Observation:') || line.startsWith('Observ')) {
+          if (currentToolCall) {
+            const t = line.startsWith('Observation:') ? line.substring(12).trim() : line.substring(6).trim()
+            currentToolCall.observation = t
+          }
+          currentType = 'observation'
+        } else if (line.startsWith('Final Answer:')) {
+          saveCurrentStep()
+          saveToolCall()
+          currentType = null
+          finalAnswer = line.substring(13).trim()
+          for (let j = i + 1; j < lines.length; j++) {
+            finalAnswer += '\n' + lines[j]
+          }
+          finalAnswer = finalAnswer.trim()
+          break
+        } else if (currentType === 'thought') {
+          currentContent.push(line)
+        } else if (currentType === 'observation' && currentToolCall) {
+          currentToolCall.observation += '\n' + line
+        } else if (currentToolCall && !currentToolCall.observation) {
+          currentToolCall.actionInput += '\n' + line
+        }
+      }
+
+      saveCurrentStep()
+      saveToolCall()
+    }
+  }
 
   // 检测流式状态
-  const isStreaming = isReactFormat && !finalAnswer && steps.length > 0
+  const hasReactContent = steps.some((s) => s.type === 'thought' || s.type === 'tool_call')
+  const isStreaming = hasReactContent && !finalAnswer
 
   return {
     steps,
@@ -197,20 +224,14 @@ const hasCotChain = computed(() => {
   return props.message.cotChain && props.message.cotChain.length > 0
 })
 
-// 判断是否有思考过程（包含 think 内容或 ReAct 步骤）
+// 判断是否有思考过程（包含步骤）
 const hasThinking = computed(() => {
-  return (hasThinkingContent.value || hasSteps.value) && !hasCotChain.value
+  return hasSteps.value && !hasCotChain.value
 })
 
-// 获取所有步骤（包括 think 内容和流式的）
+// 获取所有步骤（已按顺序包含 thinking 步骤）
 const allSteps = computed(() => {
-  const steps = []
-  // 把 think 内容作为第一个步骤
-  if (thinkingContent.value) {
-    steps.push({ type: 'thinking', content: thinkingContent.value })
-  }
-  // 添加 ReAct 步骤
-  steps.push(...parsedContent.value.steps)
+  const steps = [...parsedContent.value.steps]
   if (streamingStep.value) {
     steps.push({ ...streamingStep.value, isStreaming: true })
   }
