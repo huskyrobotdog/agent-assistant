@@ -6,6 +6,7 @@ use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaModel, Special};
 use llama_cpp_2::sampling::LlamaSampler;
+use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -15,6 +16,26 @@ use std::sync::{Arc, Mutex};
 
 /// ReAct 系统提示词模板
 const REACT_PROMPT: &str = include_str!("../resources/prompt/agent.md");
+
+/// 全局 Agent 单例
+pub static AGENT: Lazy<RwLock<Option<CoTAgent>>> = Lazy::new(|| RwLock::new(None));
+
+/// 初始化全局 Agent 单例
+pub fn init_agent_singleton(config: AgentConfig) -> Result<()> {
+    let agent = CoTAgent::new(config)?;
+    *AGENT.write() = Some(agent);
+    Ok(())
+}
+
+/// 获取全局 Agent 引用（如果已初始化）
+pub fn get_agent() -> Option<parking_lot::RwLockReadGuard<'static, Option<CoTAgent>>> {
+    let guard = AGENT.read();
+    if guard.is_some() {
+        Some(guard)
+    } else {
+        None
+    }
+}
 
 /// Agent 消息角色
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

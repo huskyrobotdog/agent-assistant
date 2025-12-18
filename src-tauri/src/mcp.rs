@@ -203,12 +203,14 @@ impl McpToolExecutorAsync {
 /// MCP 服务器管理器 - 管理多个 MCP 服务器连接
 pub struct McpManager {
     clients: TokioMutex<HashMap<String, Arc<McpClient>>>,
+    executors: TokioMutex<HashMap<String, Arc<McpToolExecutorAsync>>>,
 }
 
 impl McpManager {
     pub fn new() -> Self {
         Self {
             clients: TokioMutex::new(HashMap::new()),
+            executors: TokioMutex::new(HashMap::new()),
         }
     }
 
@@ -217,10 +219,29 @@ impl McpManager {
         let client = Arc::new(McpClient::new(config));
         client.connect().await?;
 
+        let executor = Arc::new(McpToolExecutorAsync::new(client.clone()));
+        executor.cache_tools().await;
+
         let mut clients = self.clients.lock().await;
         clients.insert(name.to_string(), client.clone());
+        drop(clients);
+
+        let mut executors = self.executors.lock().await;
+        executors.insert(name.to_string(), executor);
 
         Ok(client)
+    }
+
+    /// 获取执行器
+    pub async fn get_executor(&self, name: &str) -> Option<Arc<McpToolExecutorAsync>> {
+        let executors = self.executors.lock().await;
+        executors.get(name).cloned()
+    }
+
+    /// 获取所有执行器
+    pub async fn get_all_executors(&self) -> HashMap<String, Arc<McpToolExecutorAsync>> {
+        let executors = self.executors.lock().await;
+        executors.clone()
     }
 
     /// 获取 MCP 客户端
@@ -231,6 +252,12 @@ impl McpManager {
 
     /// 移除 MCP 服务器
     pub async fn remove_server(&self, name: &str) -> Result<()> {
+        // 移除 executor
+        let mut executors = self.executors.lock().await;
+        executors.remove(name);
+        drop(executors);
+
+        // 移除 client 并断开连接
         let mut clients = self.clients.lock().await;
         if let Some(client) = clients.remove(name) {
             client.disconnect().await?;
