@@ -63,7 +63,7 @@ function cleanContent(text) {
   return cleaned.trim()
 }
 
-// 解析内容，提取任务规划/步骤/工具调用/结果等（CoT 任务规划格式）
+// 解析内容，提取 ReAct 格式（Thought/Action/Action Input/Observation）
 const parsedContent = computed(() => {
   const content = props.message.content || ''
   const steps = []
@@ -71,11 +71,11 @@ const parsedContent = computed(() => {
   // 先清理 think 标签
   const cleanedContent = cleanContent(content)
 
-  // 检测是否是 CoT 格式（包含 Planning: 或 Step X: 等标记）
-  const isCotFormat = /^(Planning:|Step\s*\d+:)/m.test(cleanedContent)
+  // 检测是否是 ReAct 格式
+  const isReactFormat = /^(Thought:|Action:|Action Input:|Observation:|Final Answer:)/m.test(cleanedContent)
 
-  // 如果不是 CoT 格式，直接返回清理后的内容作为 response
-  if (!isCotFormat) {
+  // 如果不是 ReAct 格式，直接返回清理后的内容作为 response
+  if (!isReactFormat) {
     return {
       steps: [],
       response: cleanedContent,
@@ -84,145 +84,68 @@ const parsedContent = computed(() => {
     }
   }
 
-  // 按行解析 CoT 格式
-  const lines = content.split('\n')
+  // 按行解析 ReAct 格式
+  const lines = cleanedContent.split('\n')
   let currentType = null
   let currentContent = []
-  let currentToolName = ''
-  let currentToolInput = ''
-  let summary = ''
-  let remainingContent = [] // 非 CoT 格式的剩余内容
-  let inThinkBlock = false
+  let finalAnswer = ''
+
+  function saveCurrentStep() {
+    if (currentType && currentContent.length > 0) {
+      const text = currentContent.join('\n').trim()
+      if (text) {
+        steps.push({ type: currentType, content: text })
+      }
+    }
+    currentContent = []
+  }
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
 
-    // 跟踪 <think> 块
-    if (line.includes('<think>')) {
-      inThinkBlock = true
-      continue
-    }
-    if (line.includes('</think>')) {
-      inThinkBlock = false
-      continue
-    }
-    // 跳过 think 块内的内容
-    if (inThinkBlock) {
-      continue
-    }
-
-    if (line.startsWith('Planning:')) {
-      // 保存之前的内容
-      if (currentType && currentContent.length > 0) {
-        const cleaned = cleanContent(currentContent.join('\n'))
-        if (cleaned) steps.push({ type: currentType, content: cleaned })
-      }
-      currentType = 'planning'
-      currentContent = [line.substring(9).trim()]
-      remainingContent = [] // 进入 CoT 模式，清空剩余内容
-    } else if (line.match(/^Step\s*\d+:/)) {
-      if (currentType && currentContent.length > 0) {
-        const cleaned = cleanContent(currentContent.join('\n'))
-        if (cleaned) steps.push({ type: currentType, content: cleaned })
-      }
-      currentType = 'step'
-      currentContent = [line.replace(/^Step\s*\d+:\s*/, '').trim()]
-      remainingContent = []
-    } else if (line.startsWith('Tool:')) {
-      if (currentType && currentContent.length > 0) {
-        const cleaned = cleanContent(currentContent.join('\n'))
-        if (cleaned)
-          steps.push({ type: currentType, content: cleaned, toolName: currentToolName, toolInput: currentToolInput })
-      }
-      currentType = 'tool'
-      currentToolName = line.substring(5).trim()
-      currentToolInput = ''
-      currentContent = []
-    } else if (line.startsWith('Tool Input:')) {
-      // Tool Input 作为工具内容（可能是多行 JSON）
-      if (currentType === 'tool') {
-        currentToolInput = line.substring(11).trim()
-        currentContent = [currentToolInput]
-      }
-    } else if (
-      currentType === 'tool' &&
-      currentToolInput &&
-      !line.startsWith('Result:') &&
-      !line.startsWith('Summary:') &&
-      !line.startsWith('Tool:') &&
-      !line.match(/^Step\s*\d+:/)
-    ) {
-      // 多行 Tool Input 继续累积
-      currentToolInput += '\n' + line
-      currentContent.push(line)
-    } else if (line.startsWith('Result:')) {
-      if (currentType && currentContent.length > 0) {
-        const cleaned = cleanContent(currentContent.join('\n'))
-        if (cleaned)
-          steps.push({ type: currentType, content: cleaned, toolName: currentToolName, toolInput: currentToolInput })
-      }
-      currentType = 'result'
-      currentToolName = ''
-      currentToolInput = ''
+    if (line.startsWith('Thought:')) {
+      saveCurrentStep()
+      currentType = 'thought'
+      currentContent = [line.substring(8).trim()]
+    } else if (line.startsWith('Action:')) {
+      saveCurrentStep()
+      currentType = 'action'
       currentContent = [line.substring(7).trim()]
-    } else if (line.startsWith('Summary:')) {
-      if (currentType && currentContent.length > 0) {
-        const cleaned = cleanContent(currentContent.join('\n'))
-        if (cleaned)
-          steps.push({ type: currentType, content: cleaned, toolName: currentToolName, toolInput: currentToolInput })
-      }
+    } else if (line.startsWith('Action Input:')) {
+      saveCurrentStep()
+      currentType = 'action_input'
+      currentContent = [line.substring(13).trim()]
+    } else if (line.startsWith('Observation:') || line.startsWith('Observ')) {
+      saveCurrentStep()
+      currentType = 'observation'
+      const text = line.startsWith('Observation:') ? line.substring(12).trim() : line.substring(6).trim()
+      currentContent = [text]
+    } else if (line.startsWith('Final Answer:')) {
+      saveCurrentStep()
       currentType = null
-      currentContent = []
-      summary = line.substring(8).trim()
-      // 后续所有内容都是 Summary
+      finalAnswer = line.substring(13).trim()
+      // 后续所有内容都是 Final Answer
       for (let j = i + 1; j < lines.length; j++) {
-        summary += '\n' + lines[j]
+        finalAnswer += '\n' + lines[j]
       }
-      summary = cleanContent(summary)
+      finalAnswer = finalAnswer.trim()
       break
     } else if (currentType) {
-      // 检测到 Markdown 标题或表格，结束当前 CoT 步骤，开始累积为最终响应
-      if (line.match(/^#+\s/) || line.match(/^\|.*\|$/)) {
-        // 保存当前步骤
-        if (currentContent.length > 0) {
-          const cleaned = cleanContent(currentContent.join('\n'))
-          if (cleaned) steps.push({ type: currentType, content: cleaned })
-        }
-        currentType = null
-        currentContent = []
-        // 开始累积剩余内容
-        remainingContent.push(line)
-      } else if (line.trim() !== 'Result') {
-        // 继续当前类型的内容
-        currentContent.push(line)
-      }
-    } else {
-      // 不在任何 CoT 类型中，累积为剩余内容
-      remainingContent.push(line)
+      currentContent.push(line)
     }
   }
 
   // 保存最后的内容
-  if (currentType && currentContent.length > 0) {
-    const cleaned = cleanContent(currentContent.join('\n'))
-    if (cleaned)
-      steps.push({ type: currentType, content: cleaned, toolName: currentToolName, toolInput: currentToolInput })
-  }
-
-  // 如果没有 Summary 但有剩余内容，把剩余内容当作 response
-  if (!summary && remainingContent.length > 0) {
-    summary = cleanContent(remainingContent.join('\n'))
-  }
+  saveCurrentStep()
 
   // 检测流式状态
-  const isStreaming =
-    (content.includes('Planning:') || content.includes('Step')) && !content.includes('Summary:') && !summary
+  const isStreaming = isReactFormat && !finalAnswer && steps.length > 0
 
   return {
     steps,
-    response: summary,
+    response: finalAnswer,
     isStreaming,
-    hasSummary: !!summary,
+    hasSummary: !!finalAnswer,
   }
 })
 
@@ -272,16 +195,14 @@ function toggleThinking() {
 // 获取步骤类型的图标和颜色
 function getStepStyle(type) {
   switch (type) {
-    case 'thinking':
-      return { icon: 'pi-lightbulb', color: 'thinking' }
-    case 'planning':
-      return { icon: 'pi-list-check', color: 'planning' }
-    case 'step':
-      return { icon: 'pi-play', color: 'step' }
-    case 'tool':
-      return { icon: 'pi-wrench', color: 'tool' }
-    case 'result':
-      return { icon: 'pi-check-circle', color: 'result' }
+    case 'thought':
+      return { icon: 'pi-lightbulb', color: 'thought' }
+    case 'action':
+      return { icon: 'pi-bolt', color: 'action' }
+    case 'action_input':
+      return { icon: 'pi-code', color: 'action_input' }
+    case 'observation':
+      return { icon: 'pi-eye', color: 'observation' }
     default:
       return { icon: 'pi-circle', color: '' }
   }
@@ -290,16 +211,14 @@ function getStepStyle(type) {
 function getStepLabel(step) {
   const type = typeof step === 'string' ? step : step.type
   switch (type) {
-    case 'thinking':
-      return '推理'
-    case 'planning':
-      return '任务规划'
-    case 'step':
-      return '执行步骤'
-    case 'tool':
-      return step.toolName ? `使用工具 - ${step.toolName}` : '使用工具'
-    case 'result':
-      return '执行结果'
+    case 'thought':
+      return '思考'
+    case 'action':
+      return '动作'
+    case 'action_input':
+      return '动作输入'
+    case 'observation':
+      return '观察结果'
     default:
       return type
   }
@@ -311,8 +230,8 @@ function getStepLabel(step) {
     class="flex"
     :class="isUser ? 'justify-end' : 'justify-start'">
     <div
-      class="message-bubble w-full rounded-lg"
-      :class="isUser ? 'user-message' : 'assistant-message'">
+      class="message-bubble rounded-lg"
+      :class="isUser ? 'user-message max-w-[70%]' : 'assistant-message w-full'">
       <!-- 用户消息 -->
       <template v-if="isUser">
         <p class="whitespace-pre-wrap">{{ message.content }}</p>
@@ -530,59 +449,59 @@ function getStepLabel(step) {
   color: #f59e0b;
 }
 
-/* 任务规划类型 - 紫色 */
-.timeline-item.planning .timeline-marker i {
+/* 思考类型 - 紫色 */
+.timeline-item.thought .timeline-marker i {
   color: #8b5cf6;
 }
 
-.timeline-item.planning .timeline-content {
+.timeline-item.thought .timeline-content {
   background-color: color-mix(in srgb, #8b5cf6 8%, transparent);
   border-color: color-mix(in srgb, #8b5cf6 20%, transparent);
 }
 
-.timeline-item.planning .timeline-label {
+.timeline-item.thought .timeline-label {
   color: #7c3aed;
 }
 
-/* 执行步骤类型 - 橙色 */
-.timeline-item.step .timeline-marker i {
+/* 动作类型 - 橙色 */
+.timeline-item.action .timeline-marker i {
   color: #f59e0b;
 }
 
-.timeline-item.step .timeline-content {
+.timeline-item.action .timeline-content {
   background-color: color-mix(in srgb, #f59e0b 8%, transparent);
   border-color: color-mix(in srgb, #f59e0b 20%, transparent);
 }
 
-.timeline-item.step .timeline-label {
+.timeline-item.action .timeline-label {
   color: #d97706;
 }
 
-/* 工具调用类型 - 蓝色 */
-.timeline-item.tool .timeline-marker i {
+/* 动作输入类型 - 蓝色 */
+.timeline-item.action_input .timeline-marker i {
   color: #3b82f6;
 }
 
-.timeline-item.tool .timeline-content {
+.timeline-item.action_input .timeline-content {
   background-color: color-mix(in srgb, #3b82f6 8%, transparent);
   border-color: color-mix(in srgb, #3b82f6 20%, transparent);
 }
 
-.timeline-item.tool .timeline-label {
+.timeline-item.action_input .timeline-label {
   color: #2563eb;
 }
 
-/* 执行结果类型 - 绿色 */
-.timeline-item.result .timeline-marker i {
+/* 观察结果类型 - 绿色 */
+.timeline-item.observation .timeline-marker i {
   color: #10b981;
 }
 
-.timeline-item.result .timeline-content {
+.timeline-item.observation .timeline-content {
   background-color: color-mix(in srgb, #10b981 8%, transparent);
   border-color: color-mix(in srgb, #10b981 20%, transparent);
 }
 
-.timeline-item.result .timeline-label {
+.timeline-item.observation .timeline-label {
   color: #059669;
 }
 
@@ -758,92 +677,24 @@ function getStepLabel(step) {
   color: var(--p-surface-400);
 }
 
-.app-dark .timeline-item.planning .timeline-content {
+.app-dark .timeline-item.thought .timeline-content {
   background-color: color-mix(in srgb, #8b5cf6 12%, transparent);
   border-color: color-mix(in srgb, #8b5cf6 25%, transparent);
 }
 
-.app-dark .timeline-item.step .timeline-content {
+.app-dark .timeline-item.action .timeline-content {
   background-color: color-mix(in srgb, #f59e0b 12%, transparent);
   border-color: color-mix(in srgb, #f59e0b 25%, transparent);
 }
 
-.app-dark .timeline-item.tool .timeline-content {
+.app-dark .timeline-item.action_input .timeline-content {
   background-color: color-mix(in srgb, #3b82f6 12%, transparent);
   border-color: color-mix(in srgb, #3b82f6 25%, transparent);
 }
 
-.app-dark .timeline-item.result .timeline-content {
+.app-dark .timeline-item.observation .timeline-content {
   background-color: color-mix(in srgb, #10b981 12%, transparent);
   border-color: color-mix(in srgb, #10b981 25%, transparent);
-}
-
-/* CoT 思维链样式 */
-.cot-steps {
-  margin-top: 0.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.cot-step {
-  padding: 0.5rem 0.75rem;
-  border-radius: 0.25rem;
-  border-left: 3px solid;
-  font-size: 0.875rem;
-}
-
-.cot-step.planning {
-  background-color: color-mix(in srgb, #8b5cf6 10%, transparent);
-  border-color: #8b5cf6;
-}
-
-.cot-step.step {
-  background-color: color-mix(in srgb, #f59e0b 10%, transparent);
-  border-color: #f59e0b;
-}
-
-.cot-step.tool {
-  background-color: color-mix(in srgb, #3b82f6 10%, transparent);
-  border-color: #3b82f6;
-}
-
-.cot-step.result {
-  background-color: color-mix(in srgb, #10b981 10%, transparent);
-  border-color: #10b981;
-}
-
-.step-header {
-  display: flex;
-  align-items: center;
-  gap: 0.375rem;
-  font-weight: 500;
-  margin-bottom: 0.25rem;
-}
-
-.cot-step.planning .step-header {
-  color: #7c3aed;
-}
-
-.cot-step.step .step-header {
-  color: #d97706;
-}
-
-.cot-step.tool .step-header {
-  color: #2563eb;
-}
-
-.cot-step.result .step-header {
-  color: #059669;
-}
-
-.step-content {
-  color: var(--p-surface-600);
-  white-space: pre-wrap;
-}
-
-.app-dark .step-content {
-  color: var(--p-surface-400);
 }
 
 /* Markdown 样式 */
