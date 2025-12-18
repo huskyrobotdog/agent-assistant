@@ -3,16 +3,19 @@ import PrimeVue from 'primevue/config';
 import Aura from '@primeuix/themes/aura';
 import Ripple from 'primevue/ripple';
 import Tooltip from 'primevue/tooltip';
+import ConfirmationService from 'primevue/confirmationservice';
 import 'primeicons/primeicons.css';
 import '@/style.css';
 import App from '@/App.vue';
 import router from '@/router.js';
 import { invoke } from '@tauri-apps/api/core';
 import { appDataDir, join } from '@tauri-apps/api/path';
+import { initDb } from '@/utils/db.js';
 
 const app = createApp(App);
 
 app.use(router);
+app.use(ConfirmationService);
 
 app.use(PrimeVue, {
     ripple: true,
@@ -44,6 +47,9 @@ const loadApp = () => {
 
 
 const startApp = async () => {
+    // 初始化数据库单例
+    await initDb();
+
     const appData = await appDataDir();
     // const modelPath = await join(appData, 'models', 'Qwen3-4B-Thinking-2507-UD-IQ1_M.gguf');
     const modelPath = await join(appData, 'models', 'Qwen3-1.7B-Q4_K_M.gguf');

@@ -1,6 +1,6 @@
 <script setup>
-import { ref, onMounted, onUnmounted, watch } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
+import { ref, onMounted, onUnmounted } from 'vue'
+import { getDb } from '@/utils/db.js'
 import Card from 'primevue/card'
 import Button from 'primevue/button'
 import Message from 'primevue/message'
@@ -27,6 +27,9 @@ const error = ref('')
 const success = ref('')
 const hasErrors = ref(false)
 
+// 默认配置
+const defaultConfig = { mcpServers: {} }
+
 // 获取编辑器内容
 const getEditorValue = () => {
   return editor?.getValue() || ''
@@ -41,13 +44,21 @@ const setEditorValue = (value) => {
 
 // 加载配置
 const loadConfig = async () => {
+  const db = getDb()
+  if (!db) return
   loading.value = true
   error.value = ''
   try {
-    const config = await invoke('get_mcp_config')
-    setEditorValue(JSON.stringify(config, null, 2))
+    const result = await db.select("SELECT value FROM config WHERE key = 'mcp'")
+    if (result.length > 0) {
+      const config = JSON.parse(result[0].value)
+      setEditorValue(JSON.stringify(config, null, 2))
+    } else {
+      setEditorValue(JSON.stringify(defaultConfig, null, 2))
+    }
   } catch (e) {
     error.value = `加载配置失败: ${e}`
+    setEditorValue(JSON.stringify(defaultConfig, null, 2))
   } finally {
     loading.value = false
   }
@@ -62,6 +73,8 @@ const stripJsonComments = (jsonString) => {
 
 // 保存配置
 const saveConfig = async () => {
+  const db = getDb()
+  if (!db) return
   if (hasErrors.value) {
     error.value = 'JSON 格式无效，请检查后重试'
     return
@@ -72,7 +85,14 @@ const saveConfig = async () => {
   success.value = ''
   try {
     const config = JSON.parse(stripJsonComments(getEditorValue()))
-    await invoke('save_mcp_config', { config })
+    const valueJson = JSON.stringify(config)
+
+    // 使用 UPSERT 语法（INSERT OR REPLACE）
+    await db.execute(
+      `INSERT INTO config (key, value, updated_at) VALUES ('mcp', $1, CURRENT_TIMESTAMP)
+       ON CONFLICT(key) DO UPDATE SET value = $1, updated_at = CURRENT_TIMESTAMP`,
+      [valueJson]
+    )
     success.value = '配置保存成功'
     setTimeout(() => (success.value = ''), 3000)
   } catch (e) {
@@ -167,10 +187,10 @@ const observeDarkMode = () => {
 
 let darkModeObserver = null
 
-onMounted(() => {
+onMounted(async () => {
   initEditor()
   darkModeObserver = observeDarkMode()
-  loadConfig()
+  await loadConfig()
 })
 
 onUnmounted(() => {

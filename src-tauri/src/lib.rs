@@ -74,23 +74,43 @@ async fn init_agent(
     }
 }
 
+/// 获取 SQLite 数据库路径
+fn get_db_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let app_data = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("获取应用配置目录失败: {}", e))?;
+    Ok(app_data.join("datas.db"))
+}
+
 /// 异步加载 MCP 服务器配置
 async fn load_mcp_servers_async(
     app: &tauri::AppHandle,
     state: &tauri::State<'_, TauriAgentState>,
     agent: &Arc<CoTAgent>,
 ) -> Result<usize, String> {
-    let config_path = get_mcp_config_path(app)?;
+    let db_path = get_db_path(app)?;
 
-    if !config_path.exists() {
+    if !db_path.exists() {
         return Ok(0);
     }
 
-    let content =
-        std::fs::read_to_string(&config_path).map_err(|e| format!("读取配置文件失败: {}", e))?;
+    // 从 SQLite 读取 MCP 配置
+    let conn =
+        rusqlite::Connection::open(&db_path).map_err(|e| format!("打开数据库失败: {}", e))?;
 
-    let config: McpConfigFile =
-        serde_json::from_str(&content).map_err(|e| format!("解析配置文件失败: {}", e))?;
+    let config_value: Option<String> = conn
+        .query_row("SELECT value FROM config WHERE key = 'mcp'", [], |row| {
+            row.get(0)
+        })
+        .ok();
+
+    let config: McpConfigFile = match config_value {
+        Some(json_str) => {
+            serde_json::from_str(&json_str).map_err(|e| format!("解析配置失败: {}", e))?
+        }
+        None => return Ok(0),
+    };
 
     let mut loaded_count = 0;
     let mut all_env_configs: Vec<String> = Vec::new();
@@ -463,60 +483,51 @@ struct McpConfigFile {
     mcp_servers: HashMap<String, McpServerEntry>,
 }
 
-/// 获取 mcp.json 文件路径
-fn get_mcp_config_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("获取应用数据目录失败: {}", e))?;
-    Ok(app_data.join("mcp.json"))
-}
+/// 获取数据库迁移配置
+fn get_migrations() -> Vec<tauri_plugin_sql::Migration> {
+    use tauri_plugin_sql::{Migration, MigrationKind};
 
-/// 读取 MCP 配置
-#[tauri::command]
-fn get_mcp_config(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    let config_path = get_mcp_config_path(&app)?;
-
-    if !config_path.exists() {
-        // 返回默认配置
-        let default_config = McpConfigFile::default();
-        return serde_json::to_value(default_config).map_err(|e| e.to_string());
-    }
-
-    let content =
-        std::fs::read_to_string(&config_path).map_err(|e| format!("读取配置文件失败: {}", e))?;
-
-    let config: McpConfigFile =
-        serde_json::from_str(&content).map_err(|e| format!("解析配置文件失败: {}", e))?;
-
-    serde_json::to_value(config).map_err(|e| e.to_string())
-}
-
-/// 保存 MCP 配置
-#[tauri::command]
-fn save_mcp_config(app: tauri::AppHandle, config: serde_json::Value) -> Result<String, String> {
-    let config_path = get_mcp_config_path(&app)?;
-
-    // 验证配置格式
-    let _: McpConfigFile =
-        serde_json::from_value(config.clone()).map_err(|e| format!("配置格式无效: {}", e))?;
-
-    // 确保目录存在
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
-    }
-
-    let content = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
-
-    std::fs::write(&config_path, content).map_err(|e| format!("保存配置文件失败: {}", e))?;
-
-    Ok("配置保存成功".to_string())
+    vec![
+        Migration {
+            version: 1,
+            description: "create_agents_table",
+            sql: r#"
+                CREATE TABLE IF NOT EXISTS agents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    system_prompt TEXT DEFAULT '',
+                    allow_tools INTEGER DEFAULT 1,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 2,
+            description: "create_config_table",
+            sql: r#"
+                CREATE TABLE IF NOT EXISTS config (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    key TEXT NOT NULL UNIQUE,
+                    value TEXT DEFAULT '{}',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            "#,
+            kind: MigrationKind::Up,
+        },
+    ]
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_sql::Builder::new().build())
+        .plugin(
+            tauri_plugin_sql::Builder::default()
+                .add_migrations("sqlite:datas.db", get_migrations())
+                .build(),
+        )
         .manage(TauriAgentState::default())
         .setup(|app| {
             let app_data = app.path().app_data_dir()?;
@@ -539,9 +550,7 @@ pub fn run() {
             get_agent_state,
             get_context_info,
             add_mcp_server,
-            remove_mcp_server,
-            get_mcp_config,
-            save_mcp_config
+            remove_mcp_server
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

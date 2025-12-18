@@ -4,7 +4,8 @@ import TabList from 'primevue/tablist'
 import Tab from 'primevue/tab'
 import TabPanels from 'primevue/tabpanels'
 import TabPanel from 'primevue/tabpanel'
-import McpConfig from '@/components/settings/McpConfig.vue'
+import McpConfig from './McpConfig.vue'
+import AgentConfig from './AgentConfig.vue'
 </script>
 
 <template>
@@ -26,10 +27,7 @@ import McpConfig from '@/components/settings/McpConfig.vue'
           <McpConfig />
         </TabPanel>
         <TabPanel value="agent">
-          <div class="p-4">
-            <h3 class="text-lg font-semibold mb-4">智能体配置</h3>
-            <p class="text-surface-500">智能体配置功能即将推出...</p>
-          </div>
+          <AgentConfig />
         </TabPanel>
       </TabPanels>
     </Tabs>

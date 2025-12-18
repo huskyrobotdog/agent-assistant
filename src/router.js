@@ -8,12 +8,12 @@ const routes = [
     {
         path: '/agent',
         name: 'Agent',
-        component: () => import('@/pages/AgentPage.vue'),
+        component: () => import('@/pages/agent/Index.vue'),
     },
     {
         path: '/settings',
         name: 'Settings',
-        component: () => import('@/pages/SettingsPage.vue'),
+        component: () => import('@/pages/settings/Index.vue'),
     },
 ]
 

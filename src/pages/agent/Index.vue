@@ -2,9 +2,9 @@
 import { ref, nextTick, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import ConversationList from '@/components/agent/ConversationList.vue'
-import ChatMessage from '@/components/agent/ChatMessage.vue'
-import ChatInput from '@/components/agent/ChatInput.vue'
+import ConversationList from './ConversationList.vue'
+import ChatMessage from './ChatMessage.vue'
+import ChatInput from './ChatInput.vue'
 
 // 对话列表
 const conversations = ref([])

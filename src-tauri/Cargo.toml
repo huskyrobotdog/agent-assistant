@@ -27,3 +27,4 @@ tracing = "0.1"
 parking_lot = "0.12"
 regex = "1"
 encoding_rs = "0.8"
+rusqlite = { version = "0.32", features = ["bundled"] }
