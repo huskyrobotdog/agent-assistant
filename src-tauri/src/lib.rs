@@ -1,26 +1,29 @@
 mod agent;
-mod mcp;
+mod mcp_async;
 
 pub use agent::*;
-pub use mcp::*;
+pub use mcp_async::*;
 
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
+use tokio::sync::Mutex as TokioMutex;
 
 /// 全局 Agent 状态（Tauri 管理）
 struct TauriAgentState {
     agent: RwLock<Option<Arc<ReactAgent>>>,
-    mcp_manager: RwLock<Option<Arc<McpManager>>>,
+    mcp_manager: Arc<McpManager>,
+    mcp_executors: TokioMutex<HashMap<String, Arc<McpToolExecutorAsync>>>,
 }
 
 impl Default for TauriAgentState {
     fn default() -> Self {
         Self {
             agent: RwLock::new(None),
-            mcp_manager: RwLock::new(Some(Arc::new(McpManager::new()))),
+            mcp_manager: Arc::new(McpManager::new()),
+            mcp_executors: TokioMutex::new(HashMap::new()),
         }
     }
 }
@@ -61,8 +64,8 @@ async fn init_agent(
     let agent = Arc::new(agent);
     *state.agent.write() = Some(agent.clone());
 
-    // 加载 MCP 配置并连接服务器
-    let mcp_loaded = load_mcp_servers(&app, &state, &agent);
+    // 异步加载 MCP 配置并连接服务器
+    let mcp_loaded = load_mcp_servers_async(&app, &state, &agent).await;
 
     match mcp_loaded {
         Ok(count) if count > 0 => Ok(format!("Agent 初始化成功，已加载 {} 个 MCP 服务器", count)),
@@ -71,8 +74,8 @@ async fn init_agent(
     }
 }
 
-/// 加载 MCP 服务器配置
-fn load_mcp_servers(
+/// 异步加载 MCP 服务器配置
+async fn load_mcp_servers_async(
     app: &tauri::AppHandle,
     state: &tauri::State<'_, TauriAgentState>,
     agent: &Arc<ReactAgent>,
@@ -89,12 +92,6 @@ fn load_mcp_servers(
     let config: McpConfigFile =
         serde_json::from_str(&content).map_err(|e| format!("解析配置文件失败: {}", e))?;
 
-    let mcp_manager = state
-        .mcp_manager
-        .read()
-        .clone()
-        .ok_or_else(|| "MCP 管理器未初始化".to_string())?;
-
     let mut loaded_count = 0;
 
     for (name, entry) in config.mcp_servers {
@@ -105,15 +102,24 @@ fn load_mcp_servers(
             timeout_secs: None,
         };
 
-        match mcp_manager.add_server(&name, mcp_config) {
-            Ok(_) => {
-                if let Some(client) = mcp_manager.get_client(&name) {
-                    let executor = Arc::new(McpToolExecutorWrapper::new(client));
-                    agent.register_tool_executor(&name, executor);
-                    loaded_count += 1;
-                    #[cfg(debug_assertions)]
-                    println!("✅ MCP 服务器 {} 已加载", name);
+        match state.mcp_manager.add_server(&name, mcp_config).await {
+            Ok(client) => {
+                let executor = Arc::new(McpToolExecutorAsync::new(client));
+                executor.cache_tools().await;
+
+                // 注册到 agent（使用同步缓存的工具列表）
+                let tools = executor.get_tools_cached();
+                for tool in tools {
+                    agent.register_mcp_tool(tool);
                 }
+
+                // 保存 executor 以便后续调用
+                let mut executors = state.mcp_executors.lock().await;
+                executors.insert(name.clone(), executor);
+
+                loaded_count += 1;
+                #[cfg(debug_assertions)]
+                println!("✅ MCP 服务器 {} 已加载", name);
             }
             Err(e) => {
                 #[cfg(debug_assertions)]
@@ -125,7 +131,7 @@ fn load_mcp_servers(
     Ok(loaded_count)
 }
 
-/// 发送消息给 Agent（流式）
+/// 发送消息给 Agent（流式，支持异步 MCP 工具调用）
 #[tauri::command]
 async fn chat(
     app: tauri::AppHandle,
@@ -140,35 +146,128 @@ async fn chat(
         .ok_or_else(|| "Agent 未初始化".to_string())?;
 
     let max_iter = max_iterations.unwrap_or(10);
-    let app_clone = app.clone();
 
-    let app_clone2 = app.clone();
+    // 初始化对话
+    {
+        let agent_clone = agent.clone();
+        let message_clone = message.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            agent_clone.prepare_chat(&message_clone);
+        })
+        .await
+        .map_err(|e| format!("准备对话失败: {}", e))?;
+    }
 
-    // 在后台线程执行推理，避免阻塞主线程
-    let response = tauri::async_runtime::spawn_blocking(move || {
-        let callback = |token: &str| {
-            let _ = app_clone.emit("chat-token", token.to_string());
-        };
-        let tool_callback = |name: &str, result: &str, is_error: bool| {
-            let _ = app_clone2.emit(
+    let mut final_response = String::new();
+    let mut iterations = 0;
+
+    loop {
+        if iterations >= max_iter {
+            break;
+        }
+
+        // 执行一步推理
+        let agent_clone = agent.clone();
+        let app_clone = app.clone();
+        let step_result = tauri::async_runtime::spawn_blocking(move || {
+            let callback = |token: &str| {
+                let _ = app_clone.emit("chat-token", token.to_string());
+            };
+            agent_clone.generate_step(Some(&callback))
+        })
+        .await
+        .map_err(|e| format!("推理失败: {}", e))?
+        .map_err(|e| e.to_string())?;
+
+        let (response, tool_calls) = step_result;
+        final_response = response.clone();
+
+        if tool_calls.is_empty() {
+            // 没有工具调用，对话完成
+            let agent_clone = agent.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                agent_clone.add_assistant_response(&response);
+            })
+            .await
+            .map_err(|e| format!("添加响应失败: {}", e))?;
+            break;
+        }
+
+        // 添加助手响应（包含工具调用）
+        {
+            let agent_clone = agent.clone();
+            let response_clone = response.clone();
+            let tool_calls_clone = tool_calls.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                agent_clone.add_assistant_response_with_tools(&response_clone, tool_calls_clone);
+            })
+            .await
+            .map_err(|e| format!("添加响应失败: {}", e))?;
+        }
+
+        // 异步执行工具调用
+        for tool_call in &tool_calls {
+            let result = execute_tool_async(&state, tool_call).await;
+
+            // 发送工具结果事件
+            let _ = app.emit(
                 "tool-result",
                 serde_json::json!({
-                    "name": name,
-                    "result": result,
-                    "isError": is_error
+                    "name": result.tool_name,
+                    "result": result.result,
+                    "isError": result.is_error
                 }),
             );
-        };
-        agent.run_with_callbacks(&message, max_iter, Some(&callback), Some(&tool_callback))
-    })
-    .await
-    .map_err(|e| format!("任务执行失败: {}", e))?
-    .map_err(|e| e.to_string())?;
+
+            // 添加工具结果到对话历史
+            let agent_clone = agent.clone();
+            let result_clone = result.clone();
+            let tool_name = tool_call.name.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                agent_clone.add_tool_result(&tool_name, &result_clone);
+            })
+            .await
+            .map_err(|e| format!("添加工具结果失败: {}", e))?;
+        }
+
+        iterations += 1;
+    }
 
     // 发送完成事件
-    let _ = app.emit("chat-done", response.clone());
+    let _ = app.emit("chat-done", final_response.clone());
 
-    Ok(response)
+    Ok(final_response)
+}
+
+/// 异步执行工具调用
+async fn execute_tool_async(
+    state: &tauri::State<'_, TauriAgentState>,
+    tool_call: &ToolCall,
+) -> ToolResult {
+    let executors = state.mcp_executors.lock().await;
+
+    // 查找能执行此工具的 executor
+    for executor in executors.values() {
+        let tools = executor.get_tools_cached();
+        if tools.iter().any(|t| t.name == tool_call.name) {
+            match executor.execute_async(tool_call).await {
+                Ok(result) => return result,
+                Err(e) => {
+                    return ToolResult {
+                        tool_name: tool_call.name.clone(),
+                        result: format!("工具执行错误: {}", e),
+                        is_error: true,
+                    }
+                }
+            }
+        }
+    }
+
+    ToolResult {
+        tool_name: tool_call.name.clone(),
+        result: format!("工具 {} 未找到", tool_call.name),
+        is_error: true,
+    }
 }
 
 /// 清空对话历史
@@ -211,18 +310,12 @@ fn get_agent_state(state: tauri::State<'_, TauriAgentState>) -> Result<String, S
 
 /// 添加 MCP 服务器
 #[tauri::command]
-fn add_mcp_server(
+async fn add_mcp_server(
     state: tauri::State<'_, TauriAgentState>,
     name: String,
     command: String,
     args: Vec<String>,
 ) -> Result<String, String> {
-    let mcp_manager = state
-        .mcp_manager
-        .read()
-        .clone()
-        .ok_or_else(|| "MCP 管理器未初始化".to_string())?;
-
     let config = McpClientConfig {
         command,
         args,
@@ -230,36 +323,45 @@ fn add_mcp_server(
         timeout_secs: None,
     };
 
-    mcp_manager
+    let client = state
+        .mcp_manager
         .add_server(&name, config)
+        .await
         .map_err(|e| e.to_string())?;
 
-    let agent_opt = state.agent.read().clone();
-    if let Some(agent) = agent_opt {
-        if let Some(client) = mcp_manager.get_client(&name) {
-            let executor = Arc::new(McpToolExecutorWrapper::new(client));
-            agent.register_tool_executor(&name, executor);
+    let executor = Arc::new(McpToolExecutorAsync::new(client));
+    executor.cache_tools().await;
+
+    // 注册到 agent
+    if let Some(agent) = state.agent.read().clone() {
+        let tools = executor.get_tools_cached();
+        for tool in tools {
+            agent.register_mcp_tool(tool);
         }
     }
+
+    // 保存 executor
+    let mut executors = state.mcp_executors.lock().await;
+    executors.insert(name.clone(), executor);
 
     Ok(format!("MCP 服务器 {} 添加成功", name))
 }
 
 /// 移除 MCP 服务器
 #[tauri::command]
-fn remove_mcp_server(
+async fn remove_mcp_server(
     state: tauri::State<'_, TauriAgentState>,
     name: String,
 ) -> Result<String, String> {
-    let mcp_manager = state
+    state
         .mcp_manager
-        .read()
-        .clone()
-        .ok_or_else(|| "MCP 管理器未初始化".to_string())?;
-
-    mcp_manager
         .remove_server(&name)
+        .await
         .map_err(|e| e.to_string())?;
+
+    // 移除 executor
+    let mut executors = state.mcp_executors.lock().await;
+    executors.remove(&name);
 
     Ok(format!("MCP 服务器 {} 已移除", name))
 }

@@ -179,6 +179,66 @@ impl ReactAgent {
         executors.insert(name.to_string(), executor);
     }
 
+    /// 注册单个 MCP 工具（用于异步场景）
+    pub fn register_mcp_tool(&self, tool: McpTool) {
+        let mut tools = self.tools.write();
+        tools.push(tool);
+    }
+
+    /// 准备对话（设置系统提示词并添加用户消息）
+    pub fn prepare_chat(&self, user_input: &str) {
+        if self.messages.read().is_empty()
+            || !self.messages.read().iter().any(|m| m.role == Role::System)
+        {
+            self.set_system_prompt(&self.build_react_system_prompt());
+        }
+        self.add_user_message(user_input);
+    }
+
+    /// 执行单步生成（返回响应和工具调用）
+    pub fn generate_step(
+        &self,
+        callback: Option<&dyn Fn(&str)>,
+    ) -> Result<(String, Vec<ToolCall>), AgentError> {
+        let response = self.generate_with_callback(callback)?;
+        let tool_calls = self.parse_tool_calls(&response);
+        Ok((response, tool_calls))
+    }
+
+    /// 添加助手响应到对话历史
+    pub fn add_assistant_response(&self, response: &str) {
+        let mut messages = self.messages.write();
+        messages.push(Message {
+            role: Role::Assistant,
+            content: response.to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+        });
+    }
+
+    /// 添加带工具调用的助手响应
+    pub fn add_assistant_response_with_tools(&self, response: &str, tool_calls: Vec<ToolCall>) {
+        let mut messages = self.messages.write();
+        messages.push(Message {
+            role: Role::Assistant,
+            content: response.to_string(),
+            tool_calls: Some(tool_calls),
+            tool_call_id: None,
+        });
+    }
+
+    /// 添加工具执行结果到对话历史
+    pub fn add_tool_result(&self, tool_name: &str, result: &ToolResult) {
+        let truncated_result = Self::truncate_result(&result.result, Self::MAX_TOOL_RESULT_LENGTH);
+        let mut messages = self.messages.write();
+        messages.push(Message {
+            role: Role::Tool,
+            content: format!("Observation: {}", truncated_result),
+            tool_calls: None,
+            tool_call_id: Some(tool_name.to_string()),
+        });
+    }
+
     /// 设置系统提示词
     pub fn set_system_prompt(&self, prompt: &str) {
         let mut messages = self.messages.write();
