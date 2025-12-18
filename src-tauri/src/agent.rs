@@ -1,3 +1,4 @@
+use crate::tool::{McpTool, McpToolExecutor, ToolCall, ToolResult};
 use anyhow::{Context, Result};
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
@@ -14,29 +15,6 @@ use std::sync::{Arc, Mutex};
 
 /// ReAct 系统提示词模板
 const REACT_PROMPT: &str = include_str!("../resources/prompt/agent.md");
-
-/// MCP 工具定义
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct McpTool {
-    pub name: String,
-    pub description: String,
-    pub input_schema: serde_json::Value,
-}
-
-/// MCP 工具调用请求
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCall {
-    pub name: String,
-    pub arguments: serde_json::Value,
-}
-
-/// MCP 工具调用结果
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolResult {
-    pub tool_name: String,
-    pub result: String,
-    pub is_error: bool,
-}
 
 /// Agent 消息角色
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -82,8 +60,8 @@ impl Default for AgentConfig {
             n_ctx: 32768,
             n_threads: 4,
             n_gpu_layers: 99,
-            temperature: 0.2,  // 低温度：更确定性的输出
-            top_p: 0.85,       // 较低的 top_p 减少随机性
+            temperature: 0.2, // 低温度：更确定性的输出
+            top_p: 0.85,      // 较低的 top_p 减少随机性
             top_k: 20,
             min_p: 0.0,            // Qwen3 推荐 0.0
             presence_penalty: 1.0, // Qwen3 建议 ≤ 2.0，降低以保持输出质量
@@ -113,12 +91,6 @@ pub type GenerationCallbackRef<'a> = Option<&'a dyn Fn(&str)>;
 
 /// 工具结果回调引用
 pub type ToolResultCallbackRef<'a> = Option<&'a dyn Fn(&str, &str, bool)>;
-
-/// MCP 工具执行器 trait
-pub trait McpToolExecutor: Send + Sync {
-    fn execute(&self, tool_call: &ToolCall) -> Result<ToolResult>;
-    fn get_tools(&self) -> Vec<McpTool>;
-}
 
 /// CoT Agent 实现（任务规划与思维链）
 pub struct CoTAgent {
@@ -355,18 +327,18 @@ impl CoTAgent {
         #[cfg(debug_assertions)]
         {
             let messages = self.messages.read();
-            
+
             // 只有第一次（只有系统提示词和用户消息）时打印完整调试信息
             let is_first_turn = messages.len() <= 2;
-            
+
             if is_first_turn {
                 println!("\n════════════════════ 调试信息 ════════════════════");
-                
+
                 // 1. 打印系统提示词
                 if let Some(sys_msg) = messages.iter().find(|m| m.role == Role::System) {
                     println!("\n📋 [系统提示词]\n{}", sys_msg.content);
                 }
-                
+
                 // 2. 打印用户输入
                 if let Some(user_msg) = messages.iter().rev().find(|m| m.role == Role::User) {
                     println!("\n💬 [用户输入]\n{}", user_msg.content);
@@ -375,7 +347,7 @@ impl CoTAgent {
                 // 后续轮次只打印简短信息
                 println!("\n🔄 [继续推理] 当前消息数: {}", messages.len());
             }
-            
+
             println!("\n🧠 [AI 回复]");
         }
 
@@ -719,11 +691,7 @@ impl CoTAgent {
         );
 
         // 从命名空间格式中提取原始工具名（mcp.mysql.connect_db -> connect_db）
-        let original_tool_name = tool_call
-            .name
-            .rsplit('.')
-            .next()
-            .unwrap_or(&tool_call.name);
+        let original_tool_name = tool_call.name.rsplit('.').next().unwrap_or(&tool_call.name);
 
         // 创建使用原始工具名的 ToolCall
         let original_tool_call = ToolCall {
@@ -875,39 +843,6 @@ impl CoTAgent {
     pub fn get_current_chars(&self) -> Result<usize> {
         let prompt = self.build_prompt()?;
         Ok(prompt.chars().count())
-    }
-}
-
-/// 内置的 Echo 工具执行器（用于测试）
-pub struct EchoToolExecutor;
-
-impl McpToolExecutor for EchoToolExecutor {
-    fn execute(&self, tool_call: &ToolCall) -> Result<ToolResult> {
-        Ok(ToolResult {
-            tool_name: tool_call.name.clone(),
-            result: format!(
-                "Echo: {}",
-                serde_json::to_string(&tool_call.arguments).unwrap()
-            ),
-            is_error: false,
-        })
-    }
-
-    fn get_tools(&self) -> Vec<McpTool> {
-        vec![McpTool {
-            name: "echo".to_string(),
-            description: "回显输入的内容".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "message": {
-                        "type": "string",
-                        "description": "要回显的消息"
-                    }
-                },
-                "required": ["message"]
-            }),
-        }]
     }
 }
 

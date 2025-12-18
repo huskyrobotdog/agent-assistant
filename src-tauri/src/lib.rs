@@ -1,8 +1,10 @@
 mod agent;
 mod mcp;
+mod tool;
 
 pub use agent::*;
 pub use mcp::*;
+pub use tool::*;
 
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -313,11 +315,7 @@ async fn execute_tool_async(
     let executors = state.mcp_executors.lock().await;
 
     // 从命名空间格式中提取原始工具名（mcp.mysql.connect_db -> connect_db）
-    let original_tool_name = tool_call
-        .name
-        .rsplit('.')
-        .next()
-        .unwrap_or(&tool_call.name);
+    let original_tool_name = tool_call.name.rsplit('.').next().unwrap_or(&tool_call.name);
 
     // 创建使用原始工具名的 ToolCall
     let original_tool_call = ToolCall {

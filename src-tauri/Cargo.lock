@@ -15,6 +15,7 @@ dependencies = [
  "anyhow",
  "encoding_rs",
  "llama-cpp-2",
+ "once_cell",
  "parking_lot",
  "regex",
  "rmcp",

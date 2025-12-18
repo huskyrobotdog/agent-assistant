@@ -1,4 +1,4 @@
-use crate::agent::{McpTool, ToolCall, ToolResult};
+use crate::tool::{McpTool, ToolCall, ToolResult};
 use anyhow::{Context, Result};
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
