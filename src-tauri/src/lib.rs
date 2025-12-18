@@ -45,7 +45,7 @@ async fn init_agent(
 ) -> Result<String, String> {
     let config = AgentConfig {
         model_path: std::path::PathBuf::from(model_path),
-        n_ctx: n_ctx.unwrap_or(8192),
+        n_ctx: n_ctx.unwrap_or(32768),
         n_threads: n_threads.unwrap_or(
             std::thread::available_parallelism()
                 .map_err(|err| err.to_string())?
@@ -186,6 +186,19 @@ async fn chat(
         .map_err(|e| format!("准备对话失败: {}", e))?;
     }
 
+    // 发送初始上下文信息
+    let context_length = agent.get_context_length();
+    let current_tokens = agent.get_current_tokens().unwrap_or(0);
+    let current_chars = agent.get_current_chars().unwrap_or(0);
+    let _ = app.emit(
+        "context-update",
+        serde_json::json!({
+            "context_length": context_length,
+            "current_tokens": current_tokens,
+            "current_chars": current_chars
+        }),
+    );
+
     let mut final_response = String::new();
     let mut iterations = 0;
 
@@ -236,6 +249,18 @@ async fn chat(
         // 异步执行工具调用
         for tool_call in &tool_calls {
             let result = execute_tool_async(&state, tool_call).await;
+
+            // 工具执行后更新上下文信息
+            let current_tokens = agent.get_current_tokens().unwrap_or(0);
+            let current_chars = agent.get_current_chars().unwrap_or(0);
+            let _ = app.emit(
+                "context-update",
+                serde_json::json!({
+                    "context_length": context_length,
+                    "current_tokens": current_tokens,
+                    "current_chars": current_chars
+                }),
+            );
 
             // 发送工具结果事件
             let _ = app.emit(
@@ -334,6 +359,33 @@ fn get_agent_state(state: tauri::State<'_, TauriAgentState>) -> Result<String, S
 
     let agent_state = agent.get_state();
     Ok(format!("{:?}", agent_state))
+}
+
+/// 获取上下文信息
+#[derive(Serialize)]
+struct ContextInfo {
+    context_length: u32,
+    current_tokens: usize,
+    current_chars: usize,
+}
+
+#[tauri::command]
+fn get_context_info(state: tauri::State<'_, TauriAgentState>) -> Result<ContextInfo, String> {
+    let agent = state
+        .agent
+        .read()
+        .clone()
+        .ok_or_else(|| "Agent 未初始化".to_string())?;
+
+    let context_length = agent.get_context_length();
+    let current_tokens = agent.get_current_tokens().unwrap_or(0);
+    let current_chars = agent.get_current_chars().unwrap_or(0);
+
+    Ok(ContextInfo {
+        context_length,
+        current_tokens,
+        current_chars,
+    })
 }
 
 /// 添加 MCP 服务器
@@ -485,6 +537,7 @@ pub fn run() {
             clear_history,
             get_messages,
             get_agent_state,
+            get_context_info,
             add_mcp_server,
             remove_mcp_server,
             get_mcp_config,

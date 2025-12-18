@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, TransitionGroup } from 'vue'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 
@@ -258,21 +258,23 @@ function getStepLabel(type) {
         <div
           v-else-if="hasThinking"
           class="thinking-timeline mb-3">
-          <div
-            v-for="(step, index) in allSteps"
-            :key="index"
-            class="timeline-item"
-            :class="[getStepStyle(step.type).color, { 'is-streaming': step.isStreaming }]">
-            <div class="timeline-marker">
-              <i
-                class="pi"
-                :class="getStepStyle(step.type).icon" />
+          <TransitionGroup name="step-slide">
+            <div
+              v-for="(step, index) in allSteps"
+              :key="`${step.type}-${index}`"
+              class="timeline-item"
+              :class="[getStepStyle(step.type).color, { 'is-streaming': step.isStreaming }]">
+              <div class="timeline-marker">
+                <i
+                  class="pi"
+                  :class="getStepStyle(step.type).icon" />
+              </div>
+              <div class="timeline-content">
+                <div class="timeline-label">{{ getStepLabel(step.type) }}</div>
+                <div class="timeline-text selectable text-animate">{{ step.content }}</div>
+              </div>
             </div>
-            <div class="timeline-content">
-              <div class="timeline-label">{{ getStepLabel(step.type) }}</div>
-              <div class="timeline-text selectable">{{ step.content }}</div>
-            </div>
-          </div>
+          </TransitionGroup>
         </div>
 
         <!-- Markdown 内容（只在有响应内容时显示） -->
@@ -421,11 +423,94 @@ function getStepLabel(type) {
   }
 }
 
+/* 步骤平滑展开动画 */
+.step-slide-enter-active {
+  animation: step-enter 0.4s ease-out;
+}
+
+.step-slide-leave-active {
+  animation: step-leave 0.3s ease-in;
+}
+
+.step-slide-move {
+  transition: transform 0.4s ease;
+}
+
+@keyframes step-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(-10px);
+    max-height: 0;
+  }
+  50% {
+    opacity: 0.5;
+    max-height: 100px;
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    max-height: 500px;
+  }
+}
+
+@keyframes step-leave {
+  0% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+}
+
+/* 文字渐变动画 */
+.text-animate {
+  animation: text-fade-in 0.5s ease-out;
+}
+
+@keyframes text-fade-in {
+  0% {
+    opacity: 0.3;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+/* 流式输出时的文字渐变效果 */
+.is-streaming .timeline-text {
+  background: linear-gradient(90deg, var(--p-surface-600) 0%, var(--p-surface-400) 50%, var(--p-surface-600) 100%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: text-shimmer 2s linear infinite;
+}
+
+.app-dark .is-streaming .timeline-text {
+  background: linear-gradient(90deg, var(--p-surface-400) 0%, var(--p-surface-200) 50%, var(--p-surface-400) 100%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+@keyframes text-shimmer {
+  0% {
+    background-position: 200% center;
+  }
+  100% {
+    background-position: -200% center;
+  }
+}
+
 .timeline-content {
   background-color: color-mix(in srgb, #f59e0b 8%, transparent);
   border-radius: 0.375rem;
   padding: 0.5rem 0.75rem;
   border: 1px solid color-mix(in srgb, #f59e0b 20%, transparent);
+  transition: all 0.3s ease;
 }
 
 .timeline-label {

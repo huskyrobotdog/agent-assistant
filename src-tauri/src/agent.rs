@@ -852,6 +852,27 @@ Begin!"#,
     pub fn get_messages(&self) -> Vec<Message> {
         self.messages.read().clone()
     }
+
+    /// 获取配置的上下文长度
+    pub fn get_context_length(&self) -> u32 {
+        self.config.n_ctx
+    }
+
+    /// 获取当前使用的 token 数量
+    pub fn get_current_tokens(&self) -> Result<usize, AgentError> {
+        let prompt = self.build_prompt()?;
+        let tokens = self
+            .model
+            .str_to_token(&prompt, AddBos::Never)
+            .map_err(|e| AgentError::InferenceError(format!("分词失败: {}", e)))?;
+        Ok(tokens.len())
+    }
+
+    /// 获取当前 prompt 的字符数
+    pub fn get_current_chars(&self) -> Result<usize, AgentError> {
+        let prompt = self.build_prompt()?;
+        Ok(prompt.chars().count())
+    }
 }
 
 /// 内置的 Echo 工具执行器（用于测试）

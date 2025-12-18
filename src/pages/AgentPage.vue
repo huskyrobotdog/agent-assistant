@@ -15,6 +15,20 @@ const currentConversationId = ref(null)
 // 当前对话的消息
 const messages = ref([])
 
+// 上下文信息
+const contextInfo = ref({ context_length: 0, current_tokens: 0, current_chars: 0 })
+
+// 格式化数字（千分位）
+function formatNumber(num) {
+  return num.toLocaleString()
+}
+
+// 计算上下文使用百分比
+function getContextPercent() {
+  if (contextInfo.value.context_length === 0) return 0
+  return (contextInfo.value.current_tokens / contextInfo.value.context_length) * 100
+}
+
 const isLoading = ref(false)
 const messagesContainer = ref(null)
 const isUserAtBottom = ref(true)
@@ -120,6 +134,7 @@ function handleScroll() {
 let unlistenToken = null
 let unlistenDone = null
 let unlistenToolResult = null
+let unlistenContextUpdate = null
 
 onMounted(async () => {
   scrollToBottom(true)
@@ -152,12 +167,27 @@ onMounted(async () => {
     isLoading.value = false
     streamingMessageId.value = null
   })
+
+  // 监听上下文更新事件（实时）
+  unlistenContextUpdate = await listen('context-update', (event) => {
+    contextInfo.value = event.payload
+  })
 })
+
+// 更新上下文信息
+async function updateContextInfo() {
+  try {
+    contextInfo.value = await invoke('get_context_info')
+  } catch {
+    // Agent 未初始化时忽略错误
+  }
+}
 
 onUnmounted(() => {
   if (unlistenToken) unlistenToken()
   if (unlistenDone) unlistenDone()
   if (unlistenToolResult) unlistenToolResult()
+  if (unlistenContextUpdate) unlistenContextUpdate()
 })
 </script>
 
@@ -175,6 +205,23 @@ onUnmounted(() => {
 
     <!-- 右侧对话窗口 -->
     <div class="chat-window">
+      <!-- 上下文信息栏 -->
+      <div
+        v-if="contextInfo.context_length > 0"
+        class="context-bar">
+        <span class="context-label">上下文:</span>
+        <span class="context-value">
+          {{ formatNumber(contextInfo.current_chars) }} 字符 / {{ formatNumber(contextInfo.current_tokens) }} tokens
+        </span>
+        <span class="context-percent">({{ getContextPercent().toFixed(1) }}%)</span>
+        <div class="context-progress">
+          <div
+            class="context-progress-fill"
+            :style="{ width: `${getContextPercent().toFixed(2)}%` }"
+            :class="{ warning: getContextPercent() > 80 }" />
+        </div>
+      </div>
+
       <!-- 消息列表 -->
       <div
         ref="messagesContainer"
@@ -186,15 +233,16 @@ onUnmounted(() => {
           :message="msg" />
 
         <!-- 加载状态 -->
-        <div
-          v-if="isLoading"
-          class="flex justify-start">
-          <div class="loading-bubble">
-            <ProgressSpinner
-              style="width: 20px; height: 20px"
-              strokeWidth="4" />
+        <Transition name="fade">
+          <div
+            v-if="isLoading"
+            class="loading-container">
+            <img
+              src="/logo.svg"
+              alt="loading"
+              class="loading-logo" />
           </div>
-        </div>
+        </Transition>
       </div>
 
       <!-- 输入区域 -->
@@ -243,13 +291,86 @@ onUnmounted(() => {
   gap: 1rem;
 }
 
-.loading-bubble {
-  background-color: var(--p-surface-100);
-  border-radius: 0.5rem;
-  padding: 0.75rem 1rem;
+.loading-container {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  justify-content: center;
+  padding: 1rem;
 }
 
-.app-dark .loading-bubble {
-  background-color: var(--p-surface-800);
+.loading-logo {
+  width: 32px;
+  height: 32px;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+.context-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--p-surface-200);
+  font-size: 0.75rem;
+  color: var(--p-text-muted-color);
+}
+
+.app-dark .context-bar {
+  border-color: var(--p-surface-700);
+}
+
+.context-label {
+  font-weight: 500;
+}
+
+.context-value {
+  font-family: monospace;
+}
+
+.context-percent {
+  font-family: monospace;
+  color: var(--p-text-muted-color);
+}
+
+.context-progress {
+  flex: 1;
+  max-width: 120px;
+  height: 4px;
+  background-color: var(--p-surface-200);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.app-dark .context-progress {
+  background-color: var(--p-surface-700);
+}
+
+.context-progress-fill {
+  height: 100%;
+  background-color: var(--p-primary-color);
+  transition: width 0.3s ease;
+}
+
+.context-progress-fill.warning {
+  background-color: var(--p-orange-500);
 }
 </style>
