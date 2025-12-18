@@ -18,13 +18,7 @@ const props = defineProps({
 
 const emit = defineEmits(['send'])
 
-const inputMessage = ref(`查询一下\`group_buying_ranking_reward_config\`的表结构信息,以表格的形式展示.
-数据库的连接信息是:
-"MYSQL_DATABASE": "wooha-shop",
-"MYSQL_HOST": "db-dev.woo-ha.cn",
-"MYSQL_PASSWORD": "bgcTyVxvW9k6RaE",
-"MYSQL_PORT": "3306",
-"MYSQL_USER": "tyqoon_root"`)
+const inputMessage = ref(`查询一下\`group_buying_ranking_reward_config\`的表结构信息,以表格的形式展示.`)
 
 const charCount = computed(() => inputMessage.value.length)
 
