@@ -503,8 +503,9 @@ Begin!"#,
         let mut tool_calls = Vec::new();
 
         // 格式 1: Qwen ReAct 风格 Action/Action Input (优先)
+        // 使用 [ \t]* 只匹配空格/制表符，不匹配换行，避免 \s* 吃掉换行导致匹配失败
         let react_re =
-            regex::Regex::new(r"(?s)Action:\s*(\S+)\s*\nAction Input:\s*(\{.*?\})(?:\n|$)").ok();
+            regex::Regex::new(r"(?s)Action:[ \t]*(\S+)[ \t]*\nAction Input:[ \t]*(\{.*?\})").ok();
         if let Some(re) = react_re {
             for cap in re.captures_iter(response) {
                 if let (Some(name), Some(args)) = (cap.get(1), cap.get(2)) {
