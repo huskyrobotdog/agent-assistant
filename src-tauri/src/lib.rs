@@ -9,7 +9,7 @@ use tauri::{path::BaseDirectory, Emitter, Manager};
 async fn init_agent(app: tauri::AppHandle) -> Result<String, String> {
     let model_path = app
         .path()
-        .resolve("resources/model/agent", BaseDirectory::Resource)
+        .resolve("resources/agent", BaseDirectory::Resource)
         .map_err(|e| format!("获取模型路径失败: {}", e))?;
 
     tauri::async_runtime::spawn_blocking(move || agent::init(model_path))
