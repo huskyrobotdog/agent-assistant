@@ -43,7 +43,11 @@ async fn init_agent(
     let config = AgentConfig {
         model_path: std::path::PathBuf::from(model_path),
         n_ctx: n_ctx.unwrap_or(8192),
-        n_threads: n_threads.unwrap_or(4),
+        n_threads: n_threads.unwrap_or(
+            std::thread::available_parallelism()
+                .map_err(|err| err.to_string())?
+                .get() as i32,
+        ),
         n_gpu_layers: n_gpu_layers.unwrap_or(99),
         ..Default::default()
     };
