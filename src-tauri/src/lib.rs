@@ -93,6 +93,7 @@ async fn load_mcp_servers_async(
         serde_json::from_str(&content).map_err(|e| format!("解析配置文件失败: {}", e))?;
 
     let mut loaded_count = 0;
+    let mut all_env_configs: Vec<String> = Vec::new();
 
     for (name, entry) in config.mcp_servers {
         let mcp_config = McpClientConfig {
@@ -101,6 +102,28 @@ async fn load_mcp_servers_async(
             env: entry.env.clone(),
             timeout_secs: None,
         };
+
+        // 收集环境变量配置（敏感信息如密码用 *** 替代）
+        if !entry.env.is_empty() {
+            let env_info: Vec<String> = entry
+                .env
+                .iter()
+                .map(|(k, v)| {
+                    let key_upper = k.to_uppercase();
+                    if key_upper.contains("PASSWORD")
+                        || key_upper.contains("SECRET")
+                        || key_upper.contains("KEY")
+                    {
+                        format!("  {}: (configured)", k)
+                    } else {
+                        format!("  {}: {}", k, v)
+                    }
+                })
+                .collect();
+            if !env_info.is_empty() {
+                all_env_configs.push(format!("[{}]\n{}", name, env_info.join("\n")));
+            }
+        }
 
         match state.mcp_manager.add_server(&name, mcp_config).await {
             Ok(client) => {
@@ -126,6 +149,11 @@ async fn load_mcp_servers_async(
                 eprintln!("❌ MCP 服务器 {} 加载失败: {}", name, e);
             }
         }
+    }
+
+    // 将收集的环境变量配置设置到 Agent 上下文中
+    if !all_env_configs.is_empty() {
+        agent.set_context(&all_env_configs.join("\n\n"));
     }
 
     Ok(loaded_count)

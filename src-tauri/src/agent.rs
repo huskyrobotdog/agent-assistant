@@ -140,6 +140,8 @@ pub struct ReactAgent {
     tools: RwLock<Vec<McpTool>>,
     tool_executors: RwLock<HashMap<String, Arc<dyn McpToolExecutor>>>,
     state: RwLock<AgentState>,
+    /// 自定义上下文信息（如 MCP 环境变量配置）
+    context: RwLock<String>,
 }
 
 impl ReactAgent {
@@ -165,6 +167,7 @@ impl ReactAgent {
             tools: RwLock::new(Vec::new()),
             tool_executors: RwLock::new(HashMap::new()),
             state: RwLock::new(AgentState::Idle),
+            context: RwLock::new(String::new()),
         })
     }
 
@@ -183,6 +186,21 @@ impl ReactAgent {
     pub fn register_mcp_tool(&self, tool: McpTool) {
         let mut tools = self.tools.write();
         tools.push(tool);
+    }
+
+    /// 设置自定义上下文（如 MCP 环境变量配置）
+    pub fn set_context(&self, ctx: &str) {
+        let mut context = self.context.write();
+        *context = ctx.to_string();
+    }
+
+    /// 追加上下文信息
+    pub fn append_context(&self, ctx: &str) {
+        let mut context = self.context.write();
+        if !context.is_empty() {
+            context.push('\n');
+        }
+        context.push_str(ctx);
     }
 
     /// 准备对话（设置系统提示词并添加用户消息）
@@ -257,6 +275,7 @@ impl ReactAgent {
     /// 构建 Qwen ReAct 风格系统提示词
     fn build_react_system_prompt(&self) -> String {
         let tools = self.tools.read();
+        let context = self.context.read();
 
         // 构建工具描述
         let tool_descs: Vec<String> = tools
@@ -276,10 +295,20 @@ impl ReactAgent {
         let tool_names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
         let tool_names_str = tool_names.join(", ");
 
+        // 构建上下文信息（如 MCP 环境变量配置）
+        let context_section = if context.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n\nAvailable Configuration:\n{}\nIMPORTANT: \"(configured)\" means the actual value is hidden. You MUST ask the user to provide the actual password before connecting to database. Do NOT use \"(configured)\" as the password value.\n",
+                *context
+            )
+        };
+
         format!(
             r#"Answer the following questions as best you can. You have access to the following tools:
 
-{tool_descs}
+{tool_descs}{context_section}
 
 Use the following format:
 
@@ -297,6 +326,8 @@ Important:
 - Action Input must be a valid JSON object
 - Wait for Observation before continuing
 - If no tools are needed, go directly to Final Answer
+- NEVER fabricate or guess data. Only use actual results from tool observations
+- If a tool returns an error, report the error to user instead of making up data
 
 Begin!"#,
             tool_descs = tool_descs_str,
