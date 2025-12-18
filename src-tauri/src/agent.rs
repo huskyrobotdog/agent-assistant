@@ -54,6 +54,7 @@ const MIN_P: f32 = 0.0;
 const PRESENCE_PENALTY: f32 = 1.0;
 const MAX_TOKENS: i32 = 4096;
 const SEED: u32 = 1234;
+const MAX_TOOL_CALLS: usize = 10;
 
 /// 全局 Agent 单例
 pub static AGENT: Lazy<Mutex<Option<Agent>>> = Lazy::new(|| Mutex::new(None));
@@ -218,7 +219,6 @@ impl Agent {
         messages.push(("user".to_string(), prompt.to_string()));
 
         let mut final_response = String::new();
-        const MAX_TOOL_CALLS: usize = 10;
 
         for iteration in 0..MAX_TOOL_CALLS {
             // 构建 prompt
