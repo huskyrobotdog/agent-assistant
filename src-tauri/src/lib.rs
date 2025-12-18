@@ -75,13 +75,47 @@ async fn chat(
     message: String,
     system_prompt: Option<String>,
 ) -> Result<String, String> {
+    // 如果没有传递 system_prompt，则使用默认模板并替换占位符
+    let final_prompt = match system_prompt {
+        Some(p) => p,
+        None => {
+            // 读取 agent.md 模板
+            let prompt_path = app
+                .path()
+                .resolve("resources/prompt/agent.md", BaseDirectory::Resource)
+                .map_err(|e| format!("获取 prompt 路径失败: {}", e))?;
+
+            let template = std::fs::read_to_string(&prompt_path)
+                .map_err(|e| format!("读取 prompt 文件失败: {}", e))?;
+
+            // 构建工具 prompt
+            let tools = mcp::MCP_MANAGER.get_all_tools().await;
+            let tools_prompt = if tools.is_empty() {
+                String::new()
+            } else {
+                let mut p = String::from("# 可用工具\n\n");
+                for tool in tools {
+                    p.push_str(&format!("## {}\n", tool.name));
+                    p.push_str(&format!("{}\n\n", tool.description));
+                    p.push_str(&format!("参数: {}\n\n", tool.input_schema));
+                }
+                p
+            };
+
+            // 替换占位符
+            template
+                .replace("{{TOOLS}}", &tools_prompt)
+                .replace("{{CONTEXT}}", "")
+        }
+    };
+
     let app_clone = app.clone();
 
     let result = tauri::async_runtime::spawn_blocking(move || {
         let callback = |token: &str| {
             let _ = app_clone.emit("chat-token", token.to_string());
         };
-        agent::chat(&message, system_prompt.as_deref(), Some(&callback))
+        agent::chat(&message, Some(&final_prompt), Some(&callback))
     })
     .await
     .map_err(|e| format!("任务执行失败: {}", e))?
