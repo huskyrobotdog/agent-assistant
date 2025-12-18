@@ -14,11 +14,10 @@
       {
         "title": "Agent助手",
         "width": 1024,
-        "height": 680,
+        "height": 768,
         "minWidth": 1024,
-        "minHeight": 680,
-        "center": true,
-        "maximized": true
+        "minHeight": 768,
+        "center": true
       }
     ],
     "security": {
