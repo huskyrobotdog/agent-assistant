@@ -102,6 +102,7 @@ const MIN_P: f32 = 0.0;
 const PRESENCE_PENALTY: f32 = 1.0;
 const MAX_TOKENS: i32 = 32768;
 const MAX_TOOL_CALLS: usize = 1024;
+const MAX_CONSECUTIVE_FAILURES: usize = 3;
 
 /// 全局 Agent 单例
 pub static AGENT: Lazy<Mutex<Option<Agent>>> = Lazy::new(|| Mutex::new(None));
@@ -155,6 +156,22 @@ pub fn chat(query: &str, callback: Option<&dyn Fn(&str)>) -> Result<String> {
 
     // 有工具时，进入 ReAct 循环
     agent.react_loop(&prompt, callback)
+}
+
+/// 移除响应中的 <think>...</think> 块
+fn strip_think_blocks(response: &str) -> String {
+    let mut result = response.to_string();
+    while let Some(start) = result.find("<think>") {
+        if let Some(end) = result.find("</think>") {
+            let end = end + "</think>".len();
+            result = format!("{}{}", &result[..start], &result[end..]);
+        } else {
+            // 没有闭合标签，移除从 <think> 到末尾的内容
+            result = result[..start].to_string();
+            break;
+        }
+    }
+    result.trim().to_string()
 }
 
 /// 解析工具调用（Qwen ReAct 格式：Action: xxx\nAction Input: {...}）
@@ -258,7 +275,7 @@ impl Agent {
         let full_prompt = self.build_prompt_from_messages(&messages)?;
         let response = self.generate(&full_prompt, callback)?;
         self.clear_kv_cache();
-        Ok(response)
+        Ok(strip_think_blocks(&response))
     }
 
     /// 总结对话历史（不包含初始 prompt，压缩上下文）
@@ -310,6 +327,8 @@ impl Agent {
         messages.push(("user".to_string(), prompt.to_string()));
 
         let mut final_response = String::new();
+        let mut consecutive_failures: usize = 0;
+        let mut last_tool_call: Option<String> = None;
 
         for iteration in 0..MAX_TOOL_CALLS {
             // 构建 prompt
@@ -356,6 +375,10 @@ impl Agent {
                             "user".to_string(),
                             format!("Observation: {}", result.result),
                         ));
+
+                        // 成功后重置失败计数
+                        consecutive_failures = 0;
+                        last_tool_call = None;
                     }
                     Err(e) => {
                         #[cfg(debug_assertions)]
@@ -365,7 +388,23 @@ impl Agent {
                         if let Some(cb) = callback {
                             cb(&format!("\n{}", error_msg));
                         }
-                        messages.push(("user".to_string(), error_msg));
+                        messages.push(("user".to_string(), error_msg.clone()));
+
+                        // 检测连续失败
+                        let current_call = format!("{}:{:?}", tool_call.name, tool_call.arguments);
+                        if last_tool_call.as_ref() == Some(&current_call) {
+                            consecutive_failures += 1;
+                            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                                final_response = format!(
+                                    "抱歉，工具调用连续失败 {} 次，无法完成任务。最后错误: {}",
+                                    MAX_CONSECUTIVE_FAILURES, e
+                                );
+                                break;
+                            }
+                        } else {
+                            consecutive_failures = 1;
+                            last_tool_call = Some(current_call);
+                        }
                     }
                 }
 
@@ -382,8 +421,8 @@ impl Agent {
                 //     }
                 // }
             } else {
-                // 没有工具调用，返回最终响应
-                final_response = response;
+                // 没有工具调用，返回最终响应（移除 think 块）
+                final_response = strip_think_blocks(&response);
                 break;
             }
         }
