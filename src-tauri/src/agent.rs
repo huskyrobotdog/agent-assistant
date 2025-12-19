@@ -101,7 +101,6 @@ const TOP_K: i32 = 20;
 const MIN_P: f32 = 0.0;
 const PRESENCE_PENALTY: f32 = 1.0;
 const MAX_TOKENS: i32 = 32768;
-const SEED: u32 = 1234;
 const MAX_TOOL_CALLS: usize = 1024;
 
 /// 全局 Agent 单例
@@ -439,7 +438,12 @@ impl Agent {
             LlamaSampler::top_p(TOP_P, 1),
             LlamaSampler::min_p(MIN_P, 1),
             LlamaSampler::temp(TEMPERATURE),
-            LlamaSampler::dist(SEED),
+            LlamaSampler::dist(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as u32)
+                    .unwrap_or(1234),
+            ),
         ]);
 
         let mut output = String::new();
