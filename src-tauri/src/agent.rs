@@ -430,12 +430,15 @@ impl Agent {
         self.ctx.decode(&mut batch).context("解码失败")?;
 
         // 采样器
+        // 采样器顺序：penalties → top_k → top_p → min_p → temp → dist
+        // 注意：temp 必须在 min_p 之后，否则会破坏 Min P 算法
+        // 参考：https://www.reddit.com/r/LocalLLaMA/comments/17vonjo/
         let mut sampler = LlamaSampler::chain_simple([
             LlamaSampler::penalties(64, 1.1, 0.0, PRESENCE_PENALTY),
-            LlamaSampler::temp(TEMPERATURE),
             LlamaSampler::top_k(TOP_K),
             LlamaSampler::top_p(TOP_P, 1),
             LlamaSampler::min_p(MIN_P, 1),
+            LlamaSampler::temp(TEMPERATURE),
             LlamaSampler::dist(SEED),
         ]);
 
