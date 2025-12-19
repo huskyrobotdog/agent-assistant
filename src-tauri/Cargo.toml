@@ -33,4 +33,3 @@ once_cell = "1.19"
 default = []
 macos = ["llama-cpp-2/metal"]
 amd = ["llama-cpp-2/vulkan"]
-cuda = ["llama-cpp-2/cuda"]

@@ -15,8 +15,10 @@ jobs:
         include:
           - platform: macos-latest
             target: aarch64-apple-darwin
+            features: macos
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
+            features: amd
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -44,6 +46,13 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           prefix-key: release-${{ matrix.target }}
+
+      - name: Install Vulkan SDK (Windows)
+        if: matrix.platform == 'windows-latest'
+        uses: humbletim/install-vulkan-sdk@v1.1.1
+        with:
+          version: latest
+          cache: true
 
       - run: pnpm install
 
@@ -82,4 +91,4 @@ jobs:
           releaseBody: ${{ steps.changelog.outputs.body }}
           releaseDraft: true
           prerelease: false
-          args: '--target ${{ matrix.target }}'
+          args: '--target ${{ matrix.target }} --features ${{ matrix.features }}'
