@@ -95,8 +95,8 @@ pub fn build_react_prompt(
 const N_CTX: u32 = 32768;
 const N_THREADS: i32 = 4;
 const N_GPU_LAYERS: u32 = 99;
-const TEMPERATURE: f32 = 0.2;
-const TOP_P: f32 = 0.85;
+const TEMPERATURE: f32 = 0.6;
+const TOP_P: f32 = 0.95;
 const TOP_K: i32 = 20;
 const MIN_P: f32 = 0.0;
 const PRESENCE_PENALTY: f32 = 1.0;
