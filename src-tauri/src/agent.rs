@@ -275,18 +275,18 @@ impl Agent {
         let mut consecutive_failures: usize = 0;
         let mut last_tool_call: Option<String> = None;
 
-        for iteration in 0..MAX_TOOL_CALLS {
+        for _iteration in 0..MAX_TOOL_CALLS {
             // 构建 prompt
             let full_prompt = self.build_prompt_from_messages(&messages)?;
 
             #[cfg(debug_assertions)]
-            if iteration > 0 {
+            if _iteration > 0 {
                 println!("[Agent] 增量消息: {:?}", messages.last().unwrap().1);
             }
 
             // 生成回复
             #[cfg(debug_assertions)]
-            print!("[Agent] 响应 #{}: ", iteration + 1);
+            print!("[Agent] 响应 #{}: ", _iteration + 1);
             let response = self.generate(&full_prompt, callback)?;
             #[cfg(debug_assertions)]
             println!();

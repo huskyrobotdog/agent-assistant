@@ -99,9 +99,9 @@ pub async fn init(db_path: PathBuf) -> Result<()> {
                 #[cfg(debug_assertions)]
                 println!("[MCP] 服务器 {} 连接成功", name);
             }
-            Err(e) => {
+            Err(_e) => {
                 #[cfg(debug_assertions)]
-                println!("[MCP] 服务器 {} 连接失败: {}", name, e);
+                println!("[MCP] 服务器 {} 连接失败: {}", name, _e);
             }
         }
     }
