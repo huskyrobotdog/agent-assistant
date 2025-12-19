@@ -2,9 +2,9 @@ import OpenAI from 'openai'
 
 // LLM 配置
 const config = {
-    baseURL: 'https://igeidptdufpc.jp-members-1.clawcloudrun.com/v1',
-    apiKey: '4cc89ec7-550d-470e-b01c-7da6d19bad78',
-    model: 'agent'
+    baseURL: 'https://api.deepseek.com/v1',
+    apiKey: 'sk-f891ba405de84e7687e76eb9f54debe7',
+    model: 'deepseek-reasoner'
 }
 
 // 创建 OpenAI 客户端
