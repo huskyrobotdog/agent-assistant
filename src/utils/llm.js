@@ -4,7 +4,7 @@ import OpenAI from 'openai'
 const config = {
     baseURL: 'https://igeidptdufpc.jp-members-1.clawcloudrun.com/v1',
     apiKey: '4cc89ec7-550d-470e-b01c-7da6d19bad78',
-    model: 'Qwen/Qwen3-1.7B-GGUF:Q8_0'
+    model: 'agent'
 }
 
 // 创建 OpenAI 客户端
