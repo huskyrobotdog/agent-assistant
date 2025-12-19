@@ -36,12 +36,12 @@ Final Answer: 原始问题的最终答案
 - 如果 Observation 显示操作成功但没有返回所需数据，必须继续调用工具获取数据
 
 示例：
-Question: 查看数据库有哪些表
-Thought: 我需要使用 list_tables 工具来列出所有表
-Action: mcp.mysql.list_tables
-Action Input: {}
+Question: 用户的问题
+Thought: 分析问题，决定使用哪个工具
+Action: 选择的工具名称
+Action Input: {参数}
 
-（此时停止，等待系统返回 Observation）
+（输出 Action Input 后立即停止，等待系统返回 Observation）
 
 开始！
 
