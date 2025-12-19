@@ -52,7 +52,7 @@ jobs:
         if: matrix.platform == 'windows-latest'
         uses: humbletim/install-vulkan-sdk@v1.2
         with:
-          version: latest
+          version: 1.4.309.0
           cache: true
 
       - run: pnpm install
