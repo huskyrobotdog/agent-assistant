@@ -68,6 +68,11 @@ function renameConversation({ id, title }) {
   }
 }
 
+// 清空对话
+function clearMessages() {
+  messages.value = []
+}
+
 // 当前流式消息 ID
 const streamingMessageId = ref(null)
 
@@ -189,7 +194,7 @@ onUnmounted(() => {
 
 <template>
   <div class="page-container">
-    <!-- 左侧对话列表 -->
+    <!-- 左侧对话列表（暂时屏蔽）
     <ConversationList
       :conversations="conversations"
       :current-id="currentConversationId"
@@ -198,24 +203,37 @@ onUnmounted(() => {
       @create="createConversation"
       @delete="deleteConversation"
       @rename="renameConversation" />
+    -->
 
-    <!-- 右侧对话窗口 -->
+    <!-- 对话窗口 -->
     <div class="chat-window">
-      <!-- 上下文信息栏 -->
-      <div
-        v-if="contextInfo.context_length > 0"
-        class="context-bar">
-        <span class="context-label">上下文:</span>
-        <span class="context-value">
-          {{ formatNumber(contextInfo.current_chars) }} 字符 / {{ formatNumber(contextInfo.current_tokens) }} tokens
-        </span>
-        <span class="context-percent">({{ getContextPercent().toFixed(1) }}%)</span>
-        <div class="context-progress">
-          <div
-            class="context-progress-fill"
-            :style="{ width: `${getContextPercent().toFixed(2)}%` }"
-            :class="{ warning: getContextPercent() > 80 }" />
+      <!-- 顶部工具栏 -->
+      <div class="toolbar">
+        <!-- 上下文信息 -->
+        <div
+          v-if="contextInfo.context_length > 0"
+          class="context-info">
+          <span class="context-label">上下文:</span>
+          <span class="context-value">
+            {{ formatNumber(contextInfo.current_chars) }} 字符 / {{ formatNumber(contextInfo.current_tokens) }} tokens
+          </span>
+          <span class="context-percent">({{ getContextPercent().toFixed(1) }}%)</span>
+          <div class="context-progress">
+            <div
+              class="context-progress-fill"
+              :style="{ width: `${getContextPercent().toFixed(2)}%` }"
+              :class="{ warning: getContextPercent() > 80 }" />
+          </div>
         </div>
+        <div class="toolbar-spacer" />
+        <!-- 清空对话按钮 -->
+        <button
+          class="clear-btn"
+          :disabled="messages.length === 0 || isLoading"
+          @click="clearMessages">
+          <i class="pi pi-trash" />
+          清空对话
+        </button>
       </div>
 
       <!-- 消息列表 -->
@@ -320,7 +338,7 @@ onUnmounted(() => {
   opacity: 0;
 }
 
-.context-bar {
+.toolbar {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -330,8 +348,51 @@ onUnmounted(() => {
   color: var(--p-text-muted-color);
 }
 
-.app-dark .context-bar {
+.app-dark .toolbar {
   border-color: var(--p-surface-700);
+}
+
+.toolbar-spacer {
+  flex: 1;
+}
+
+.context-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.clear-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--p-text-muted-color);
+  background: transparent;
+  border: 1px solid var(--p-surface-300);
+  border-radius: 0.375rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.clear-btn:hover:not(:disabled) {
+  color: var(--p-red-500);
+  border-color: var(--p-red-500);
+  background: var(--p-red-50);
+}
+
+.clear-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.app-dark .clear-btn {
+  border-color: var(--p-surface-600);
+}
+
+.app-dark .clear-btn:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.1);
 }
 
 .context-label {
