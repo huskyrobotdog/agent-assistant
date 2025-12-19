@@ -1,10 +1,9 @@
 <script setup>
 import { ref, nextTick, onMounted, onUnmounted } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
 import ConversationList from './ConversationList.vue'
 import ChatMessage from './ChatMessage.vue'
 import ChatInput from './ChatInput.vue'
+import { chatStream } from '@/utils/llm'
 
 // 对话列表
 const conversations = ref([])
@@ -76,6 +75,30 @@ function clearMessages() {
 // 当前流式消息 ID
 const streamingMessageId = ref(null)
 
+// 构建消息历史（用于 API 调用）
+function buildMessages(userContent) {
+  // 获取历史消息（排除当前正在输入的）
+  const history = messages.value
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .map((m) => ({
+      role: m.role,
+      content: m.role === 'assistant' ? cleanThinkTags(m.content) : m.content,
+    }))
+
+  // 添加新的用户消息
+  history.push({ role: 'user', content: userContent })
+
+  return history
+}
+
+// 清理 think 标签
+function cleanThinkTags(content) {
+  return content
+    .replace(/<think>[\s\S]*?<\/think>/g, '')
+    .replace(/<think>[\s\S]*$/, '')
+    .trim()
+}
+
 // 发送消息
 async function handleSend(content) {
   const userMessage = {
@@ -93,22 +116,65 @@ async function handleSend(content) {
     id: aiMessageId,
     role: 'assistant',
     content: '',
+    reasoning: '',
   })
 
   await nextTick()
   scrollToBottom()
 
+  // 创建新的 AbortController
+  abortController = new AbortController()
+
   try {
-    await invoke('chat', { message: content })
+    const apiMessages = buildMessages(content)
+
+    await chatStream(apiMessages, {
+      signal: abortController.signal,
+      onToken: (token) => {
+        const msg = messages.value.find((m) => m.id === aiMessageId)
+        if (msg) {
+          msg.content += token
+          nextTick(() => scrollToBottom())
+        }
+      },
+      onReasoning: (token) => {
+        const msg = messages.value.find((m) => m.id === aiMessageId)
+        if (msg) {
+          // 将推理内容包装在 <think> 标签中
+          if (!msg.content.includes('<think>')) {
+            msg.content = '<think>' + token
+          } else if (msg.content.includes('</think>')) {
+            // 已有完整的 think 块，追加新的
+            msg.content = msg.content.replace(/<\/think>$/, token)
+          } else {
+            // 正在 think 块中
+            msg.content += token
+          }
+          nextTick(() => scrollToBottom())
+        }
+      },
+      onDone: () => {
+        const msg = messages.value.find((m) => m.id === aiMessageId)
+        if (msg && msg.content.includes('<think>') && !msg.content.includes('</think>')) {
+          msg.content += '</think>'
+        }
+      },
+      onError: (error) => {
+        const msg = messages.value.find((m) => m.id === aiMessageId)
+        if (msg) {
+          msg.content = `❌ 错误: ${error.message}`
+        }
+      },
+    })
   } catch (error) {
-    // 更新消息为错误信息
     const msg = messages.value.find((m) => m.id === aiMessageId)
-    if (msg) {
-      msg.content = `❌ 错误: ${error}`
+    if (msg && !msg.content) {
+      msg.content = `❌ 错误: ${error.message}`
     }
   } finally {
     isLoading.value = false
     streamingMessageId.value = null
+    abortController = null
     await nextTick()
     scrollToBottom()
   }
@@ -135,60 +201,18 @@ function handleScroll() {
   checkIsAtBottom()
 }
 
-// 事件监听器
-let unlistenToken = null
-let unlistenDone = null
-let unlistenToolResult = null
-let unlistenContextUpdate = null
+// 用于取消请求的控制器
+let abortController = null
 
-onMounted(async () => {
+onMounted(() => {
   scrollToBottom(true)
-
-  // 监听流式 token
-  unlistenToken = await listen('chat-token', (event) => {
-    if (streamingMessageId.value) {
-      const msg = messages.value.find((m) => m.id === streamingMessageId.value)
-      if (msg) {
-        msg.content += event.payload
-        nextTick(() => scrollToBottom())
-      }
-    }
-  })
-
-  // 监听工具执行结果（使用 CoT Result 格式）
-  unlistenToolResult = await listen('tool-result', (event) => {
-    if (streamingMessageId.value) {
-      const msg = messages.value.find((m) => m.id === streamingMessageId.value)
-      if (msg) {
-        const { result } = event.payload
-        msg.content += `\nResult: ${result}\n`
-        nextTick(() => scrollToBottom())
-      }
-    }
-  })
-
-  // 监听完成事件
-  unlistenDone = await listen('chat-done', () => {
-    isLoading.value = false
-    streamingMessageId.value = null
-  })
-
-  // 监听上下文更新事件（实时）
-  unlistenContextUpdate = await listen('context-update', (event) => {
-    contextInfo.value = event.payload
-  })
 })
 
-// 更新上下文信息（暂未实现后端命令）
-async function updateContextInfo() {
-  // TODO: 后端需要实现 get_context_info 命令
-}
-
 onUnmounted(() => {
-  if (unlistenToken) unlistenToken()
-  if (unlistenDone) unlistenDone()
-  if (unlistenToolResult) unlistenToolResult()
-  if (unlistenContextUpdate) unlistenContextUpdate()
+  // 取消正在进行的请求
+  if (abortController) {
+    abortController.abort()
+  }
 })
 </script>
 
