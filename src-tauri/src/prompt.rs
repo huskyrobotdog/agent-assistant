@@ -32,3 +32,5 @@ Action Input: {参数}
 
 Question: {{QUERY}}
 Thought:";
+
+pub const RESUM: &str = "请总结以上对话内容，给出简洁明了的回复。";
