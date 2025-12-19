@@ -84,9 +84,10 @@ jobs:
             echo 'EOF'
           } >> $GITHUB_OUTPUT
 
-      - uses: tauri-apps/tauri-action@v0.3
+      - uses: tauri-apps/tauri-action@v0.5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_TARGET_TRIPLE: ${{ matrix.target }}
         with:
           tagName: v__VERSION__
           releaseName: Agent助手 v__VERSION__
