@@ -294,42 +294,6 @@ impl Agent {
         Ok(strip_think_blocks(&response))
     }
 
-    /// 总结对话历史（不包含初始 prompt，压缩上下文）
-    fn summarize_history(&mut self, history: &[(String, String)]) -> Result<String> {
-        if history.is_empty() {
-            return Ok(String::new());
-        }
-
-        // 构建历史内容
-        let history_text: String = history
-            .iter()
-            .map(|(role, content)| format!("{}: {}", role, content))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // 如果历史较短，直接返回
-        if history_text.len() < 800 {
-            return Ok(history_text);
-        }
-
-        let prompt = format!(
-            "请简洁地总结以下对话历史，保留关键信息（工具调用、结果、重要数据）：\n\n\
-            {}\n\n\
-            总结：",
-            history_text
-        );
-
-        let messages = vec![("user".to_string(), prompt)];
-        let full_prompt = self.build_prompt_from_messages(&messages)?;
-        let summary = self.generate(&full_prompt, None)?;
-        self.clear_kv_cache();
-
-        #[cfg(debug_assertions)]
-        println!("[Agent] 历史总结: {}", summary.trim());
-
-        Ok(summary.trim().to_string())
-    }
-
     /// ReAct 循环（有工具时自动调用）
     pub fn react_loop(&mut self, prompt: &str, callback: Option<&dyn Fn(&str)>) -> Result<String> {
         #[cfg(debug_assertions)]
