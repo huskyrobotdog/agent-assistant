@@ -32,7 +32,8 @@ Final Answer: 原始问题的最终答案
 - 你必须先输出 Action 和 Action Input 调用工具
 - Observation 只能由系统提供，你绝对不能自己生成或捏造
 - 输出 Action Input 后必须立即停止，等待系统返回 Observation
-- 没有真实的 Observation 数据，绝对不能给出 Final Answer
+- Final Answer 必须直接引用 Observation 中的真实数据，禁止编造任何未在 Observation 中出现的内容
+- 如果 Observation 显示操作成功但没有返回所需数据，必须继续调用工具获取数据
 
 示例：
 Question: 查看数据库有哪些表
