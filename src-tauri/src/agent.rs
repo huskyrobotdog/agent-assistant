@@ -320,10 +320,14 @@ impl Agent {
                                 result.result.len()
                             );
 
+                            let args_str = serde_json::to_string_pretty(&tool_call.arguments)
+                                .unwrap_or_else(|_| tool_call.arguments.to_string());
                             let summary_prompt = format!(
-                                "以下是工具返回的内容：\n{}\n\n{}",
+                                "工具调用信息：\n工具名称：{}\n入参：{}\n\n返回结果：\n{}\n\n{}",
+                                tool_call.name,
+                                args_str,
                                 result.result,
-                                crate::prompt::RESUM
+                                crate::prompt::TOOL_CALL_RESUM
                             );
                             let summary_messages = vec![("user".to_string(), summary_prompt)];
                             let summary_full_prompt =
