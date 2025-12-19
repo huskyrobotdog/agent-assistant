@@ -283,13 +283,17 @@ impl McpManager {
         Ok(client)
     }
 
-    /// 获取所有工具
+    /// 获取所有工具（带命名空间前缀 mcp.<server>.<tool>）
     pub async fn get_all_tools(&self) -> Vec<McpTool> {
         let clients = self.clients.lock().await;
         let mut all_tools = Vec::new();
 
-        for client in clients.values() {
-            all_tools.extend(client.get_tools().await);
+        for (server_name, client) in clients.iter() {
+            for mut tool in client.get_tools().await {
+                // 添加命名空间前缀: mcp.<server>.<tool>
+                tool.name = format!("mcp.{}.{}", server_name, tool.name);
+                all_tools.push(tool);
+            }
         }
 
         all_tools
@@ -304,15 +308,28 @@ impl McpManager {
             .collect()
     }
 
-    /// 通过工具名执行工具（自动查找对应的服务器）
+    /// 通过工具名执行工具（解析命名空间 mcp.<server>.<tool>）
     pub async fn execute_tool(
         &self,
         tool_name: &str,
         arguments: serde_json::Value,
     ) -> Result<ToolResult> {
-        let clients = self.clients.lock().await;
+        // 解析命名空间: mcp.<server>.<tool>
+        let parts: Vec<&str> = tool_name.splitn(3, '.').collect();
+        if parts.len() == 3 && parts[0] == "mcp" {
+            let server_name = parts[1];
+            let actual_tool_name = parts[2];
 
-        // 遍历所有客户端，查找包含该工具的服务器
+            let clients = self.clients.lock().await;
+            if let Some(client) = clients.get(server_name) {
+                return client.call_tool(actual_tool_name, arguments).await;
+            } else {
+                return Err(anyhow::anyhow!("未找到 MCP 服务器: {}", server_name));
+            }
+        }
+
+        // 兼容旧格式：遍历所有客户端查找
+        let clients = self.clients.lock().await;
         for client in clients.values() {
             let tools = client.get_tools().await;
             if tools.iter().any(|t| t.name == tool_name) {

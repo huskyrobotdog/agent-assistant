@@ -50,22 +50,22 @@ fn build_server_context(configs: &[(String, McpClientConfig)]) -> String {
         return String::new();
     }
 
-    let mut result = String::from("\n\n注意：以下 MCP 服务器已配置并连接：\n");
+    let mut result = String::from("\n\n注意：以下工具命名空间已配置：\n");
     for (name, config) in configs {
-        result.push_str(&format!("- Server '{}':\n", name));
+        result.push_str(&format!("- 命名空间 'mcp.{}':\n", name));
         result.push_str(&format!(
-            "  command: {} {}\n",
+            "  命令: {} {}\n",
             config.command,
             config.args.join(" ")
         ));
         if !config.env.is_empty() {
-            result.push_str("  environment:\n");
+            result.push_str("  环境变量:\n");
             for (key, value) in &config.env {
                 result.push_str(&format!("    {}: {}\n", key, value));
             }
         }
     }
-    result.push_str("这些环境变量已预先配置，你无需再次提供。\n");
+    result.push_str("这些环境变量已预先配置，调用工具时无需再次提供。\n");
     result
 }
 
