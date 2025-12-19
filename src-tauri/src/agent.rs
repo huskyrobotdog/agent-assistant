@@ -83,6 +83,7 @@ const PRESENCE_PENALTY: f32 = 1.0;
 const MAX_TOKENS: i32 = 32768;
 const MAX_TOOL_CALLS: usize = 1024;
 const MAX_CONSECUTIVE_FAILURES: usize = 3;
+const MAX_TOOL_RESULT_LEN: usize = 500;
 
 /// 全局 Agent 单例
 pub static AGENT: Lazy<Mutex<Option<Agent>>> = Lazy::new(|| Mutex::new(None));
@@ -349,15 +350,36 @@ impl Agent {
                         #[cfg(debug_assertions)]
                         println!("[Agent] 工具结果: {}", result.result);
 
+                        // 如果工具结果过长，进行总结压缩
+                        let final_result = if result.result.len() > MAX_TOOL_RESULT_LEN {
+                            #[cfg(debug_assertions)]
+                            println!(
+                                "[Agent] 工具结果过长 ({} 字符)，进行总结...",
+                                result.result.len()
+                            );
+
+                            let summary_prompt = format!(
+                                "以下是工具返回的内容：\n{}\n\n{}",
+                                result.result,
+                                crate::prompt::RESUM
+                            );
+                            let summary_messages = vec![("user".to_string(), summary_prompt)];
+                            let summary_full_prompt =
+                                self.build_prompt_from_messages(&summary_messages)?;
+                            let summary = self.generate(&summary_full_prompt, None)?;
+                            self.clear_kv_cache();
+                            strip_think_blocks(&summary)
+                        } else {
+                            result.result.clone()
+                        };
+
                         // 添加观察结果（Qwen ReAct 格式）
-                        let observation = format!("\nObservation: {}", result.result);
+                        let observation = format!("\nObservation: {}", final_result);
                         if let Some(cb) = callback {
                             cb(&observation);
                         }
-                        messages.push((
-                            "user".to_string(),
-                            format!("Observation: {}", result.result),
-                        ));
+                        messages
+                            .push(("user".to_string(), format!("Observation: {}", final_result)));
 
                         // 成功后重置失败计数
                         consecutive_failures = 0;
