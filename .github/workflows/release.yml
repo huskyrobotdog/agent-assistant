@@ -1,12 +1,12 @@
-name: release
+name: Release
 
 on:
   workflow_dispatch:
     branches: [main]
 
 jobs:
-  build:
-    name: Build (${{ matrix.target }})
+  publish:
+    name: Publish (${{ matrix.target }})
     permissions:
       contents: write
     strategy:
@@ -15,53 +15,46 @@ jobs:
         include:
           - platform: macos-latest
             target: aarch64-apple-darwin
-            features: macos
+          - platform: macos-latest
+            target: x86_64-apple-darwin
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
-            features: amd
     runs-on: ${{ matrix.platform }}
+
     steps:
       - uses: actions/checkout@v4
         with:
-          lfs: true
+          fetch-depth: 0
 
-      - name: Set macOS deployment target
-        if: matrix.platform == 'macos-latest'
-        run: echo "MACOSX_DEPLOYMENT_TARGET=11.0" >> $GITHUB_ENV
-
-      - uses: pnpm/action-setup@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
         with:
           version: 9
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: lts/*
           cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
         with:
-          workspaces: './src-tauri/target/'
-          prefix-key: release-${{ matrix.target }}
+          workspaces: './src-tauri -> target'
+          prefix-key: v1-${{ matrix.target }}
 
-      - name: Install Vulkan SDK (Windows)
-        if: matrix.platform == 'windows-latest'
-        uses: humbletim/install-vulkan-sdk@v1.2
-        with:
-          version: 1.4.309.0
-          cache: true
+      - name: Install dependencies
+        run: pnpm install
 
-      - run: pnpm install
-        working-directory: ./
-
-      - id: changelog
+      - name: Generate changelog
+        id: changelog
         shell: bash
         run: |
-          git fetch --tags --force
           PREVIOUS_TAG=$(git tag --sort=-creatordate | head -n 1)
           if [ -z "$PREVIOUS_TAG" ]; then
             COMMITS=$(git log --pretty=format:"- %s（%h）" --no-merges -20)
@@ -84,14 +77,14 @@ jobs:
             echo 'EOF'
           } >> $GITHUB_OUTPUT
 
-      - uses: tauri-apps/tauri-action@v0.5
+      - name: Build and release
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_TARGET_TRIPLE: ${{ matrix.target }}
         with:
           tagName: v__VERSION__
           releaseName: Agent助手 v__VERSION__
           releaseBody: ${{ steps.changelog.outputs.body }}
           releaseDraft: true
           prerelease: false
-          args: '--target ${{ matrix.target }} --features ${{ matrix.features }}'
+          args: --target ${{ matrix.target }}
