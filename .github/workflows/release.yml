@@ -55,6 +55,7 @@ jobs:
           cache: true
 
       - run: pnpm install
+        working-directory: ./
 
       - id: changelog
         shell: bash
