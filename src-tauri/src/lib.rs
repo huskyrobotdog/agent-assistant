@@ -1,6 +1,7 @@
 mod agent;
 mod db;
 mod mcp;
+mod prompt;
 
 use tauri::{path::BaseDirectory, Emitter, Manager};
 
