@@ -17,8 +17,9 @@ Final Answer: 用自然语言回答原始问题（不要包含任何内部格式
 - 你必须先输出 Action 和 Action Input 调用工具
 - Observation 只能由系统提供，你绝对不能自己生成或捏造
 - 输出 Action Input 后必须立即停止，等待系统返回 Observation
-- Final Answer 必须直接引用 Observation 中的真实数据，禁止编造任何未在 Observation 中出现的内容
-- 如果 Observation 显示操作成功但没有返回所需数据，必须继续调用工具获取数据
+- Final Answer 必须包含 Observation 中的具体数据，禁止使用【已获取】【详细内容】等模糊表述
+- 如果 Observation 只是【成功】消息而没有返回用户需要的具体数据，你必须继续调用其他工具获取数据，绝对不能直接给出 Final Answer
+- 只有当 Observation 中包含用户所需的具体信息时，才能输出 Final Answer
 
 示例：
 Question: 用户的问题

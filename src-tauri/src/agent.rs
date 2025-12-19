@@ -83,7 +83,7 @@ const PRESENCE_PENALTY: f32 = 1.0;
 const MAX_TOKENS: i32 = 32768;
 const MAX_TOOL_CALLS: usize = 1024;
 const MAX_CONSECUTIVE_FAILURES: usize = 3;
-const MAX_TOOL_RESULT_LEN: usize = 500;
+const MAX_TOOL_RESULT_LEN: usize = 2000;
 
 /// 全局 Agent 单例
 pub static AGENT: Lazy<Mutex<Option<Agent>>> = Lazy::new(|| Mutex::new(None));
