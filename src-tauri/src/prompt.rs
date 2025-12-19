@@ -1,5 +1,3 @@
-use crate::mcp::{McpClientConfig, McpTool};
-
 pub const REACT: &str = "请尽可能回答以下问题。你可以使用以下工具：
 
 {{TOOLS}}
