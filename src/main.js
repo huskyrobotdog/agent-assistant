@@ -8,7 +8,6 @@ import 'primeicons/primeicons.css';
 import '@/style.css';
 import App from '@/App.vue';
 import router from '@/router.js';
-import { invoke } from '@tauri-apps/api/core';
 import { initDb } from '@/utils/db.js';
 
 const app = createApp(App);
@@ -47,8 +46,6 @@ const loadApp = () => {
 
 const startApp = async () => {
     await initDb();
-    await invoke('init_agent');
-    await invoke('init_mcp');
     loadApp()
 }
 
