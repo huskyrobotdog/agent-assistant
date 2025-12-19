@@ -29,9 +29,11 @@ Thought: 我现在知道最终答案了
 Final Answer: 原始问题的最终答案
 
 重要规则：
-- Observation 由系统在工具执行后自动提供，你绝对不能自己生成或捏造 Observation
+- 你必须先执行 Action 调用工具，才能获得 Observation
+- Observation 只能由系统提供，你绝对不能自己生成或捏造
 - 输出 Action Input 后必须立即停止，等待系统返回 Observation
-- 只有在获得足够信息后才能给出 Final Answer
+- 没有真实的 Observation 数据，绝对不能给出 Final Answer
+- 禁止在没有调用工具的情况下编造查询结果
 
 开始！
 
