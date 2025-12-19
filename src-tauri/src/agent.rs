@@ -565,6 +565,13 @@ impl Agent {
             n_cur += 1;
         }
 
+        // 输出 pending_buffer 中剩余的内容（不在 think 块中的部分）
+        if let Some(cb) = callback {
+            if !in_think_block && !pending_buffer.is_empty() {
+                cb(&pending_buffer);
+            }
+        }
+
         Ok(output)
     }
 
