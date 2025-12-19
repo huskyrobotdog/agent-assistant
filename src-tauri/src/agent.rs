@@ -29,15 +29,23 @@ Thought: 我现在知道最终答案了
 Final Answer: 原始问题的最终答案
 
 重要规则：
-- 你必须先执行 Action 调用工具，才能获得 Observation
+- 你必须先输出 Action 和 Action Input 调用工具
 - Observation 只能由系统提供，你绝对不能自己生成或捏造
 - 输出 Action Input 后必须立即停止，等待系统返回 Observation
 - 没有真实的 Observation 数据，绝对不能给出 Final Answer
-- 禁止在没有调用工具的情况下编造查询结果
+
+示例：
+Question: 查看数据库有哪些表
+Thought: 我需要使用 list_tables 工具来列出所有表
+Action: mcp.mysql.list_tables
+Action Input: {}
+
+（此时停止，等待系统返回 Observation）
 
 开始！
 
-Question: {{QUERY}}";
+Question: {{QUERY}}
+Thought:";
 
 /// 根据工具信息生成工具描述
 /// 参考：https://github.com/QwenLM/Qwen/blob/main/examples/react_prompt.md
