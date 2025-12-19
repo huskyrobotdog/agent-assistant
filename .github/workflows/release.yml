@@ -43,9 +43,9 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: release-${{ matrix.target }}
+      # - uses: Swatinem/rust-cache@v2
+      #   with:
+      #     prefix-key: release-${{ matrix.target }}
 
       - name: Install Vulkan SDK (Windows)
         if: matrix.platform == 'windows-latest'
