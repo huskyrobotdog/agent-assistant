@@ -320,15 +320,34 @@ impl Agent {
                                 result.result.len()
                             );
 
+                            // 提取之前所有的 Thought
+                            let thoughts: Vec<&str> = messages
+                                .iter()
+                                .filter(|(role, _)| role == "assistant")
+                                .filter_map(|(_, content)| {
+                                    content.find("Thought:").map(|start| {
+                                        let thought_start = start + "Thought:".len();
+                                        let end = content[thought_start..]
+                                            .find("\nAction:")
+                                            .map(|e| thought_start + e)
+                                            .unwrap_or(content.len());
+                                        content[thought_start..end].trim()
+                                    })
+                                })
+                                .collect();
+                            let thoughts_str = if thoughts.is_empty() {
+                                "无".to_string()
+                            } else {
+                                thoughts.join("\n")
+                            };
+
                             let args_str = serde_json::to_string_pretty(&tool_call.arguments)
                                 .unwrap_or_else(|_| tool_call.arguments.to_string());
-                            let summary_prompt = format!(
-                                "工具调用信息：\n工具名称：{}\n入参：{}\n\n返回结果：\n{}\n\n{}",
-                                tool_call.name,
-                                args_str,
-                                result.result,
-                                crate::prompt::TOOL_CALL_RESUM
-                            );
+                            let summary_prompt = crate::prompt::TOOL_CALL_RESUM
+                                .replace("{{THOUGHTS}}", &thoughts_str)
+                                .replace("{{TOOL_NAME}}", &tool_call.name)
+                                .replace("{{TOOL_ARGS}}", &args_str)
+                                .replace("{{TOOL_RESULT}}", &result.result);
                             let summary_messages = vec![("user".to_string(), summary_prompt)];
                             let summary_full_prompt =
                                 self.build_prompt_from_messages(&summary_messages)?;
