@@ -1,0 +1,87 @@
+name: release
+
+on:
+  workflow_dispatch:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Set macOS deployment target
+        if: matrix.platform == 'macos-latest'
+        run: echo "MACOSX_DEPLOYMENT_TARGET=11.0" >> $GITHUB_ENV
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: fuxi-quant-app/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          prefix-key: release-${{ matrix.target }}
+
+      - run: pnpm install
+        working-directory: fuxi-quant-app
+
+      - id: changelog
+        shell: bash
+        run: |
+          git fetch --tags --force
+          PREVIOUS_TAG=$(git tag --sort=-creatordate | head -n 1)
+          if [ -z "$PREVIOUS_TAG" ]; then
+            COMMITS=$(git log --pretty=format:"- %s（%h）" --no-merges -20)
+          else
+            COMMITS=$(git log ${PREVIOUS_TAG}..HEAD --pretty=format:"- %s（%h）" --no-merges)
+          fi
+          {
+            echo 'body<<EOF'
+            echo "## ✨ 更新内容"
+            echo ""
+            if [ -n "$COMMITS" ]; then
+              echo "$COMMITS"
+            else
+              echo "🎉 首次发布"
+            fi
+            if [ -n "$PREVIOUS_TAG" ]; then
+              echo ""
+              echo "📋 [查看完整变更记录](https://github.com/${{ github.repository }}/compare/${PREVIOUS_TAG}...v__VERSION__)"
+            fi
+            echo 'EOF'
+          } >> $GITHUB_OUTPUT
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: fuxi-quant-app
+          tagName: v__VERSION__
+          releaseName: 伏羲量化 v__VERSION__
+          releaseBody: ${{ steps.changelog.outputs.body }}
+          releaseDraft: true
+          prerelease: false
+          args: '--target ${{ matrix.target }}'
