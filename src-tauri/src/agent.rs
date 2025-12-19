@@ -372,8 +372,9 @@ impl Agent {
                     tool_call.name, tool_call.arguments
                 );
 
-                // 添加 assistant 消息
-                messages.push(("assistant".to_string(), response.clone()));
+                // 添加 assistant 消息（移除 think 块）
+                let clean_response = strip_think_blocks(&response);
+                messages.push(("assistant".to_string(), clean_response));
 
                 // 执行工具（通过 MCP_MANAGER）
                 match execute_tool(&tool_call) {
@@ -503,6 +504,9 @@ impl Agent {
         let mut output = String::new();
         let mut n_cur = batch.n_tokens();
         let mut decoder = encoding_rs::UTF_8.new_decoder();
+        // 用于过滤 think 块的状态
+        let mut in_think_block = false;
+        let mut pending_buffer = String::new();
 
         while n_cur < MAX_TOKENS {
             let token = sampler.sample(&self.ctx, batch.n_tokens() - 1);
@@ -533,7 +537,7 @@ impl Agent {
                 break;
             }
 
-            // 调试打印流式输出
+            // 调试打印流式输出（包含 think 块）
             #[cfg(debug_assertions)]
             {
                 use std::io::Write;
@@ -541,9 +545,40 @@ impl Agent {
                 let _ = std::io::stdout().flush();
             }
 
-            // 回调
-            if let Some(cb) = callback {
-                cb(&token_str);
+            // 流式回调时过滤 think 块
+            if callback.is_some() {
+                pending_buffer.push_str(&token_str);
+
+                // 检测 <think> 开始
+                if !in_think_block {
+                    if let Some(pos) = pending_buffer.find("<think>") {
+                        // 输出 <think> 之前的内容
+                        let before = &pending_buffer[..pos];
+                        if !before.is_empty() {
+                            if let Some(cb) = callback {
+                                cb(before);
+                            }
+                        }
+                        in_think_block = true;
+                        pending_buffer = pending_buffer[pos..].to_string();
+                    } else if !pending_buffer.contains('<') {
+                        // 没有潜在的 <think> 标签，直接输出
+                        if let Some(cb) = callback {
+                            cb(&pending_buffer);
+                        }
+                        pending_buffer.clear();
+                    }
+                    // 如果包含 '<' 但还没完整的 <think>，继续缓冲
+                }
+
+                // 检测 </think> 结束
+                if in_think_block {
+                    if let Some(pos) = pending_buffer.find("</think>") {
+                        // think 块结束，丢弃整个 think 块
+                        in_think_block = false;
+                        pending_buffer = pending_buffer[pos + "</think>".len()..].to_string();
+                    }
+                }
             }
 
             batch.clear();
