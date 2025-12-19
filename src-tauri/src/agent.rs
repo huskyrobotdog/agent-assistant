@@ -139,44 +139,6 @@ pub fn chat(query: &str, callback: Option<&dyn Fn(&str)>) -> Result<String> {
     agent.react_loop(&prompt, callback)
 }
 
-/// 使用自定义系统提示词进行对话（拼接工具信息，但不进入 ReAct 循环）
-/// - system_prompt: 自定义系统提示词
-/// - query: 用户问题
-/// - callback: 流式输出回调
-pub fn chat_with_system_prompt(
-    system_prompt: &str,
-    query: &str,
-    callback: Option<&dyn Fn(&str)>,
-) -> Result<String> {
-    // 获取工具列表和服务器配置
-    let tools = tauri::async_runtime::block_on(crate::mcp::MCP_MANAGER.get_all_tools());
-    let server_configs =
-        tauri::async_runtime::block_on(crate::mcp::MCP_MANAGER.get_server_configs());
-
-    // 构建工具描述
-    let tools_desc = if tools.is_empty() {
-        String::new()
-    } else {
-        let descs: Vec<String> = tools.iter().map(format_tool_desc).collect();
-        format!("\n\n可用工具：\n{}", descs.join("\n\n"))
-    };
-
-    // 构建服务器上下文
-    let context = build_server_context(&server_configs);
-
-    // 拼接完整提示词：系统提示词 + 工具描述 + 服务器上下文 + 用户问题
-    let full_prompt = format!(
-        "{}{}{}\n\n用户问题：{}",
-        system_prompt, tools_desc, context, query
-    );
-
-    let mut guard = AGENT.lock();
-    let agent = guard.as_mut().context("Agent 未初始化")?;
-
-    // 直接生成回复，不进入 ReAct 循环
-    agent.generate_simple(&full_prompt, callback)
-}
-
 /// 移除响应中的 <think>...</think> 块
 fn strip_think_blocks(response: &str) -> String {
     let mut result = response.to_string();
