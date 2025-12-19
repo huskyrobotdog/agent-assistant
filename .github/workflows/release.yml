@@ -35,7 +35,7 @@ jobs:
         with:
           node-version: lts/*
           cache: pnpm
-          cache-dependency-path: fuxi-quant-app/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -46,7 +46,6 @@ jobs:
           prefix-key: release-${{ matrix.target }}
 
       - run: pnpm install
-        working-directory: fuxi-quant-app
 
       - id: changelog
         shell: bash
@@ -78,9 +77,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          projectPath: fuxi-quant-app
           tagName: v__VERSION__
-          releaseName: 伏羲量化 v__VERSION__
+          releaseName: Agent助手 v__VERSION__
           releaseBody: ${{ steps.changelog.outputs.body }}
           releaseDraft: true
           prerelease: false
