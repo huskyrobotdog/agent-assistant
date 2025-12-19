@@ -18,7 +18,7 @@ const props = defineProps({
 
 const emit = defineEmits(['send'])
 
-const inputMessage = ref('')
+const inputMessage = ref('查询一下MYSQL中表的结构：group_buying_ranking_config')
 
 const charCount = computed(() => inputMessage.value.length)
 
